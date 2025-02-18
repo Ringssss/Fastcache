@@ -1,8 +1,7 @@
 import os
 import torch
 # torch.backends.cuda.enable_flash_sdp(True)  # 启用 Flash Attention
-# torch.backends.cuda.enable_mem_efficient_sdp(True)  # 启用内存高效的attention
-
+# torch.backends.cuda.enable_mem_efficient_sdp(False)  # 启用内存高效的attention
 
 import json
 import sys
@@ -29,12 +28,13 @@ from utils_ccm.utils_compress import *
 from utils_ccm.utils_schedule import *
 from utils_ccm.utils_kvcachePool import *
 
+
 """
 v1.0
 最基本的全流程静态并发系统。测量时长无bug。
 
 v1.1
-实现pd分离管理，测试性能。
+实现程序上的pd分离管理，测试性能。
 于2024.12.26日23点完成。
 
 v1.2
@@ -50,11 +50,11 @@ kvc attention mask debug
 v1.3
 完成c环节独立batching
 
-v1.3.1 *
+v1.3.1
 指标测量改动。ccm超参最优。
 
 v1.4
-结束cuda.syn的保护，由此带来大批涨速。
+结束cuda.syn的同步，由此带来大批涨速。
 
 v2.0
 更改使用模式，成为完整的批量使用样例。
@@ -67,6 +67,9 @@ v2.2
 
 v2.3
 引入kvcache内存池，查看内存管理程度。
+
+v2.4 *
+正式提交。
 
 """
 
@@ -399,6 +402,7 @@ class ImprovedConcurrentTester:
 
 
 
+
         self._init_press_list()
 
     def _init_press_list(self):
@@ -513,8 +517,9 @@ class ImprovedConcurrentTester:
             # 不涨2
 
             end_p = start_p + len(target_past_key_values)
+            self.GPU_monitor.accum_state_round('compress')
             if self.check_gpu_flag:
-                self.GPU_monitor.accum_state_round('compress')
+                # self.GPU_monitor.accum_state_round('compress')
                 before_comp_stats = self.GPU_monitor.check_gpu_stats()
                 print('before_comp', before_comp_stats)
 
@@ -663,6 +668,7 @@ class ImprovedConcurrentTester:
                 use_cache=True,
                 return_dict=True,
             )
+
             # torch.cuda.empty_cache()
             # print(outputs.logits.shape)
             # print(outputs.image_hidden_states.shape)
@@ -2149,18 +2155,20 @@ def main():
     torch.cuda.manual_seed_all(seed)
 
     # 测试参数配置
-    num_samples = 80  # 测试样本数
+    num_samples = 90  # 测试样本数
     batch_size = 1  # 批处理大小
     max_input_tokens = 128  # 最大输入长度
     max_new_tokens = 512
     # compression_factor = 5  # 压缩率
     compression_ratio_list = [5., 2.]  # 压缩率
     max_workers = 1  # 并发数
-    # folder_path = 'results_0114_log'
-    folder_path = 'results_0110_log'
+    # folder_path = 'results_0114_log/'
+    folder_path = 'results_0114_log/results_shan1/'
+    # folder_path = 'results_0110_log'
     # gpu_info_path = None
     # gpu_info_path = 'gpu_stats_logs/gpu_stats_with_stateround_1510.csv'
     log_save = True
+    # log_save = False
     torch_dtype = torch.float16
     # log_save = False
 
@@ -2269,10 +2277,12 @@ def main():
     model.eval()
     compressor.eval()
 
-    # req_per_sec_list = [1.,3.,7.,10.]
     req_per_sec_list = [10.]
+    # req_per_sec_list = [1.,3.,7.,10.]
+    # req_per_sec_list = [10.]
     # test_setting_list = [[True, 'SnapKV']]
     # test_setting_list = [[False, 'orig'],  [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
+    # test_batching_list = [[5, 5, 5]] * 4
     # test_batching_list = [[1, 1, 8]] * 4
     # test_setting_list = [ [False, 'orig'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
     # # test_setting_list = [[True, 'ccm'], [False, 'orig'], [True, 'ccm'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
@@ -2280,14 +2290,19 @@ def main():
     # test_setting_list = [[False, 'orig'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
     # test_batching_list = [[1,1,1]]*4
     # test_setting_list = [[True, 'ccm']]
-    # test_batching_list = [[5, 45, 90]]
+    # test_batching_list = [[1, 1, 8]]
+    # test_batching_list = [[2, 2, 8]]
     test_setting_list = [[True, 'ccm']]
+    # test_batching_list = [[4,4,8]]
+    # test_batching_list = [[3, 3, 6]]
+    # test_batching_list = [[20, 10, 120]]
+    # test_batching_list = [[5, 10, 20]]
     test_batching_list = [[5, 45, 90]]
     # test_setting_list = [[False, 'orig'],  [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
-    # # test_batching_list = [[1, 1, 8]] * 4
+    # test_batching_list = [[1, 1, 8]] * 4
     # test_batching_list = [[2, 2, 8]] * 4
-    # gpu_info_path = None
-    gpu_info_path = f'gpu_stats_logs/gpu_stats_with_stateround_{test_batching_list[0][0]}{test_batching_list[0][1]}{test_batching_list[0][2]}.csv'
+    gpu_info_path = None
+    # gpu_info_path = f'gpu_stats_logs/gpu_stats_with_stateround_{test_batching_list[0][0]}{test_batching_list[0][1]}{test_batching_list[0][2]}_pool.csv'
     # test_batching_list = [[10, 10, 10]]
     # test_batching_list =  [[3,4,12]] + [[2,2,8]]*5
     # test_batching_list =  [[3,4,12]] + [[1,1,8]]*5
@@ -2306,86 +2321,7 @@ def main():
                 compression_ratio_list, device, test_dataloader, max_workers,
                 max_wait_time, worker_check_time, datasets_name, folder_path, gpu_info_path, log_save=log_save
                 )
-            # item_batching = test_batching_list[i_setting]
-            #
-            # use_compression = item_setting[0]
-            # comp_mode = item_setting[1]
-            # # comp_mode = 'Knorm'
-            # # comp_mode = 'StreamingLLM'
-            # # comp_mode = 'RandomPress'
-            # # comp_mode = 'SnapKV'
-            # # comp_mode = 'ExpectedAttention'
-            # # comp_mode = 'Quantized'
-            # req_per_sec = i_req_sec
-            # std_batch_threshold_prefill = item_batching[0]
-            # compress_batch = item_batching[1]  # 无关prefill size
-            # max_serve_batch_size = std_batch_threshold_prefill  # 测试批次数
-            # min_batch_threshold = std_batch_threshold_prefill
-            # std_batch_threshold_decoding = int(item_batching[2] / std_batch_threshold_prefill)
-            #
-            # # use_compression = True
-            # # comp_mode = 'ccm'
-            # # comp_mode = 'Knorm'
-            # # comp_mode = 'StreamingLLM'
-            # # comp_mode = 'RandomPress'
-            # # comp_mode = 'SnapKV'
-            # # comp_mode = 'ExpectedAttention'
-            # # comp_mode = 'Quantized'
-            # # std_batch_threshold_prefill = 3
-            # # compress_batch = 4  # 无关prefill size
-            # # max_serve_batch_size = std_batch_threshold_prefill  # 测试批次数
-            # # min_batch_threshold = std_batch_threshold_prefill
-            # # std_batch_threshold_decoding = int(12 / std_batch_threshold_prefill)
-            #
-            # # 创建测试器
-            # print("Creating tester...")
-            # args_ImprovedConcurrentTester = [
-            #     model, processor, compressor, max_new_tokens, num_samples, compress_batch,
-            #     compression_ratio_list, use_compression, comp_mode, device
-            # ]
-            # tester = ImprovedConcurrentTester(*args_ImprovedConcurrentTester)
-            #
-            # # 运行并发测试
-            # print("\nStarting concurrent testing...")
-            # with autocast(dtype=torch.float):
-            #     metrics, analyze_times_result, \
-            #     system_completion_time, system_total_generated_lens \
-            #         = tester.run_concurrent_test(
-            #         test_dataloader,
-            #         max_workers=max_workers,
-            #         num_samples=num_samples,
-            #         max_serve_batch_size=max_serve_batch_size,
-            #         min_batch_threshold=min_batch_threshold,
-            #         std_batch_threshold_decoding=std_batch_threshold_decoding,
-            #         max_wait_time=max_wait_time,
-            #         worker_check_time=worker_check_time,
-            #         req_per_sec=req_per_sec,
-            #         use_compression=use_compression,
-            #         comp_mode=comp_mode
-            #     )
-            #
-            # output_path = f"results_log/comp_res_{datetime.now().strftime('%Y%m%d_%H%M%S')}_reqsec{i_req_sec:.0f}_" \
-            #               f"p{item_batching[0]}c{item_batching[1]}d{item_batching[2]}_{comp_mode}_{datasets_name}.txt"
-            # generate_results_txt(metrics, analyze_times_result, system_completion_time, system_total_generated_lens,
-            #                      comp_mode,
-            #                      output_path)
-            #
-            # torch.cuda.empty_cache()
-
-
-            # # 打印结果
-            # print(comp_mode)
-            # print_metrics(metrics)
-            # print(analyze_times_result)
-            # print(f"Service completed in {system_completion_time:.2f} seconds.")
-            # print(f"Service generated {system_total_generated_lens} tokens.")
-            # print(f"Thoughtput: {system_total_generated_lens/(system_completion_time+1e-5):.2f} tokens/s.")
-
-            # # 保存结果
-            # with open(output_path, 'w') as f:
-            #     json.dump(metrics, f, indent=4)
-            # print(f"\nResults saved to {output_path}")
-
+            torch.cuda.empty_cache()
 
 if __name__ == "__main__":
     main()
