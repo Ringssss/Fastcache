@@ -57,6 +57,9 @@ v2.0
 v2.1
 加入内存管理机制，上限变高，但是内存删除可能引入开销。
 
+v2.2
+支持半精度，提升了总体吞吐上限。
+
 
 """
 
@@ -368,11 +371,14 @@ class ImprovedConcurrentTester:
         self.gpu_info_path = gpu_info_path
         self.use_compression = use_compression
         self.comp_mode = comp_mode
+
+        self.last_prefill_time = time.time()
         self.cuda_stream = torch.cuda.Stream()
         # self.timeCheck = TimeTik()
         self.monitor = PerformanceMonitor()
         self.timestamp_manager = TimestampManager()
         # self.GPU_monitor = GPUMonitor(monitor_sys=False)
+        self.check_gpu_flag = True
         self.GPU_monitor = GPUMonitor(interval=0.02)
 
 
@@ -444,8 +450,9 @@ class ImprovedConcurrentTester:
         past_key_values_list_final = []
         comp_past_key_values_list = []
         # print("past_key_values_list", len(past_key_values_list), len(past_key_values_list[0]))
-        _integrated_compress_ccm_stats = self.GPU_monitor.check_gpu_stats()
-        print('_integrated_compress_ccm', _integrated_compress_ccm_stats)
+        if self.check_gpu_flag:
+            _integrated_compress_ccm_stats = self.GPU_monitor.check_gpu_stats()
+            print('_integrated_compress_ccm', _integrated_compress_ccm_stats)
 
         start_split_time = time.time()
         for past_key_values in past_key_values_list:
@@ -455,9 +462,9 @@ class ImprovedConcurrentTester:
         past_key_values_list.clear()
         # # 显式清空 CUDA 缓存
         # torch.cuda.empty_cache()
-
-        past_key_values_list_final_stats = self.GPU_monitor.check_gpu_stats()
-        print('past_key_values_list_final', past_key_values_list_final_stats)
+        if self.check_gpu_flag:
+            past_key_values_list_final_stats = self.GPU_monitor.check_gpu_stats()
+            print('past_key_values_list_final', past_key_values_list_final_stats)
 
         print("start_split_time", time.time() - start_split_time)
         compress_batch_size = self.compress_batch
@@ -471,29 +478,31 @@ class ImprovedConcurrentTester:
             # ref_count_past_key_values_list_final = sys.getrefcount(past_key_values_list_final[0])
             # print(f"Tensor ref_count_past_key_values_list_final reference count: {ref_count_past_key_values_list_final}")
             target_past_key_values = past_key_values_list_final[:compress_batch_size]
-            ref_count_orig = sys.getrefcount(target_past_key_values[0])
-            print(f"Tensor target_past_key_values1 reference count: {ref_count_orig}")
+            # ref_count_orig = sys.getrefcount(target_past_key_values[0])
+            # print(f"Tensor target_past_key_values1 reference count: {ref_count_orig}")
             # ref_count_target_past_key_values = sys.getrefcount(target_past_key_values[0])
             # print(f"Tensor target_past_key_values reference count: {ref_count_target_past_key_values}")
             past_key_values_list_final_last = past_key_values_list_final[len(target_past_key_values):]
             past_key_values_list_final.clear()
             past_key_values_list_final = past_key_values_list_final_last
-            ref_count_orig = sys.getrefcount(target_past_key_values[0])
-            print(f"Tensor target_past_key_values2 reference count: {ref_count_orig}")
+            # ref_count_orig = sys.getrefcount(target_past_key_values[0])
+            # print(f"Tensor target_past_key_values2 reference count: {ref_count_orig}")
             # ref_count_target_past_key_values = sys.getrefcount(target_past_key_values[0])
             # print(f"Tensor target_past_key_values reference count: {ref_count_target_past_key_values}")
 
 
             end_p = start_p + len(target_past_key_values)
-            self.GPU_monitor.accum_state_round('compress')
-            before_comp_stats = self.GPU_monitor.check_gpu_stats()
-            print('before_comp', before_comp_stats)
+            if self.check_gpu_flag:
+                self.GPU_monitor.accum_state_round('compress')
+                before_comp_stats = self.GPU_monitor.check_gpu_stats()
+                print('before_comp', before_comp_stats)
             orig_past_key_values = self.merge_kv_cache(target_past_key_values)
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
-            after_merge_stats = self.GPU_monitor.check_gpu_stats()
-            print('after_merge', after_merge_stats)
-            print(after_merge_stats['memory_used'] - before_comp_stats['memory_used'])
+            if self.check_gpu_flag:
+                after_merge_stats = self.GPU_monitor.check_gpu_stats()
+                print('after_merge', after_merge_stats)
+                print(after_merge_stats['memory_used'] - before_comp_stats['memory_used'])
 
             orig_memory = self._get_kv_cache_memory(orig_past_key_values)
             kv_len = orig_past_key_values[0][0].shape[2]
@@ -504,29 +513,32 @@ class ImprovedConcurrentTester:
             # print("comp_len", comp_len)
             comp_start = time.time()
             self.timestamp_manager.record_timestamp(request_ids_list[start_p:end_p], 'compress_start', comp_start)
-            ref_count_orig = sys.getrefcount(target_past_key_values[0])
-            print(f"Tensor target_past_key_values3 reference count: {ref_count_orig}")
+            # ref_count_orig = sys.getrefcount(target_past_key_values[0])
+            # print(f"Tensor target_past_key_values3 reference count: {ref_count_orig}")
 
             comp_past_key_values = self.run_compressor(self.compressor,
                                                        orig_past_key_values, comp_len)
-            ref_count_orig = sys.getrefcount(target_past_key_values[0])
-            print(f"Tensor target_past_key_values4 reference count: {ref_count_orig}")
+            # ref_count_orig = sys.getrefcount(target_past_key_values[0])
+            # print(f"Tensor target_past_key_values4 reference count: {ref_count_orig}")
             # print("comp_past_key_values", comp_past_key_values[0][0].shape)
             # torch.cuda.synchronize()
             _ = comp_past_key_values[0][0].shape # torch.cuda.synchronize()代替
-            after_comp_stats = self.GPU_monitor.check_gpu_stats()
-            print('after_comp', after_comp_stats)
-            print('comp_mem_use', after_comp_stats['memory_used'] - after_merge_stats['memory_used'])
-            ref_count_orig = sys.getrefcount(target_past_key_values[0])
-            print(f"Tensor target_past_key_values reference count: {ref_count_orig}")
+            if self.check_gpu_flag:
+                after_comp_stats = self.GPU_monitor.check_gpu_stats()
+                print('after_comp', after_comp_stats)
+                print('comp_mem_use', after_comp_stats['memory_used'] - after_merge_stats['memory_used'])
+            # ref_count_orig = sys.getrefcount(target_past_key_values[0])
+            # print(f"Tensor target_past_key_values reference count: {ref_count_orig}")
             for _target_tensor in target_past_key_values:
                 del _target_tensor
             target_past_key_values.clear()
             del orig_past_key_values
             torch.cuda.empty_cache()
-            after_del_stats = self.GPU_monitor.check_gpu_stats()
-            print('after_del', after_del_stats)
-            print(after_del_stats['memory_used'] - after_comp_stats['memory_used'])
+
+            if self.check_gpu_flag:
+                after_del_stats = self.GPU_monitor.check_gpu_stats()
+                print('after_del', after_del_stats)
+                print(after_del_stats['memory_used'] - after_comp_stats['memory_used'])
 
             compress_finish = time.time()
             self.timestamp_manager.record_timestamp(request_ids_list[start_p:end_p], 'compress_finish', compress_finish)
@@ -596,7 +608,7 @@ class ImprovedConcurrentTester:
                 use_cache=True,
                 return_dict=True,
             )
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             # print(outputs.logits.shape)
             # print(outputs.image_hidden_states.shape)
             # before_prefill_stats = self.GPU_monitor.check_gpu_stats()
@@ -604,11 +616,12 @@ class ImprovedConcurrentTester:
             # 获取原始KV cache并计算内存占用
             # orig_past_key_values = outputs.past_key_values
             # torch.cuda.synchronize()
+
+            orig_past_key_values = outputs.past_key_values
             prefill_finish = time.time()
             prefill_time = prefill_finish - prefill_start
             # compress_start = time.time()
             self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_finish', prefill_finish)
-            orig_past_key_values = outputs.past_key_values
             # self.timestamp_manager.record_timestamp(request_ids_list, 'compress_queueing', prefill_finish)
             # self.timestamp_manager.record_timestamp(request_ids_list, 'compress_start', compress_start)
 
@@ -870,6 +883,7 @@ class ImprovedConcurrentTester:
                f"use_compression: {use_compression}, " \
                f""
         print(fstr)
+        self.last_prefill_time = time.time()
         gpu_info_flag = False
         if gpu_info_path is not None:
             gpu_info_flag = True
@@ -949,7 +963,7 @@ class ImprovedConcurrentTester:
             mode = None
             if middleware.idle_workers > 0:
                 # 使用调度器选择要处理的批次
-                selected_batch, mode = middleware.scheduler.select_batch()
+                selected_batch, mode = middleware.scheduler.select_batch(self.last_prefill_time, middleware.max_wait_time)
                 # print("middleware.idle_workers", middleware.idle_workers)
 
             if selected_batch and middleware.idle_workers > 0:
@@ -959,6 +973,7 @@ class ImprovedConcurrentTester:
                     middleware.idle_workers -= 1
 
                 if mode == 'prefill':
+
                     # 处理prefill请求
                     batches_tensor = self._batching_tensors([req.batch for req in selected_batch])
                     # request_ids_list = ([[].extend(req.request_id) for req in selected_batch])
@@ -978,7 +993,6 @@ class ImprovedConcurrentTester:
                     future.add_done_callback(self._on_prefill_complete)
                 else:
                     # 处理decoding请求
-
                     results_batched = self._merge_prefill_results(selected_batch)
 
                     # todo 时间测量层面之后再梳理
@@ -1037,6 +1051,7 @@ class ImprovedConcurrentTester:
             torch.cuda.current_stream().synchronize()
             torch.cuda.empty_cache()
             print('stop_time', time.time()-stop_time)
+        self.last_prefill_time = time.time()
 
     def _on_decoding_complete(self, future):
         """Decoding完成的回调"""
@@ -1075,6 +1090,7 @@ class ImprovedConcurrentTester:
         #         middleware.completion_event.set()
         #     return result
         print('\nstart prefill')
+        # start_time = time.time()
         result, batch_size, seq_lens, processing_time, memory_usage = self._process_prefill(batches, request_ids_list,
                                                                                             use_compression,
                                                                                             comp_mode)  # 需要修改原始_process_batch以支持批处理
@@ -1108,6 +1124,7 @@ class ImprovedConcurrentTester:
                   f"wait_decoding_count:{middleware.scheduler.decoding_count},"
                   f"finish_decoding_count:{middleware.processed_decode_batches},")
             middleware.completion_event.set()
+        # print('nihao_time', time.time()-start_time)
         return result
 
     def _process_prefill(self, batch, request_ids_list, use_compression, comp_mode):
@@ -1124,7 +1141,8 @@ class ImprovedConcurrentTester:
                 # inputs = batch
                 batch_size, seq_lens = inputs['input_ids'].shape
 
-                with torch.no_grad(), autocast(dtype=torch.float):
+                with torch.no_grad():
+                # with torch.no_grad(), autocast(dtype=torch.float):
                     input_forward = {
                         "input_ids": inputs["input_ids"][:, :-1],
                         "attention_mask": inputs["attention_mask"][:, :-1],
@@ -1133,16 +1151,18 @@ class ImprovedConcurrentTester:
 
                     if use_compression:
                         # 使用压缩模式
-                        # before_prefill_stats = self.GPU_monitor.check_gpu_stats()
-                        # print('before_prefill', before_prefill_stats)
+                        if self.check_gpu_flag:
+                            before_prefill_stats = self.GPU_monitor.check_gpu_stats()
+                            print('before_prefill', before_prefill_stats)
                         past_key_values, compression_time, compression_ratio, prefill_time = \
                             self._exec_compress(comp_mode, input_forward, request_ids_list)
                         memory_usage = self._get_kv_cache_memory(past_key_values)
                         # print(torch.cuda.memory_summary())
                         # print("memory_usage", memory_usage)
-                        # after_prefill_stats = self.GPU_monitor.check_gpu_stats()
-                        # print('after_prefill', after_prefill_stats)
-                        # print('prefill_mem_use', after_prefill_stats['memory_used'] - before_prefill_stats['memory_used'])
+                        if self.check_gpu_flag:
+                            after_prefill_stats = self.GPU_monitor.check_gpu_stats()
+                            print('after_prefill', after_prefill_stats)
+                            print('prefill_mem_use', after_prefill_stats['memory_used'] - before_prefill_stats['memory_used'])
                         # print('memory_usage', memory_usage)
                         # if comp_mode =="ccm":
                         #     prefill_finish = time.time()
@@ -1228,13 +1248,15 @@ class ImprovedConcurrentTester:
         self.GPU_monitor.accum_state_round('decoding')
         decode_start = time.time()
         self.timestamp_manager.record_timestamp(prefill_result["request_id"], 'decode_start', decode_start)
-        before_decode_stats = self.GPU_monitor.check_gpu_stats()
-        print('before_decode', before_decode_stats)
+        if self.check_gpu_flag:
+            before_decode_stats = self.GPU_monitor.check_gpu_stats()
+            print('before_decode', before_decode_stats)
         result, batch_size, valid_lens, generated_lens, valid_lens_list, decoding_time, throughput = \
                         self._process_decoding(prefill_result, use_compression, comp_mode)
-        # after_decode_stats = self.GPU_monitor.check_gpu_stats()
-        # print('after_decode', after_decode_stats)
-        # print('decoding_mem_use', after_decode_stats['memory_used'] - before_decode_stats['memory_used'])
+        if self.check_gpu_flag:
+            after_decode_stats = self.GPU_monitor.check_gpu_stats()
+            print('after_decode', after_decode_stats)
+            print('decoding_mem_use', after_decode_stats['memory_used'] - before_decode_stats['memory_used'])
         decoding_finish = time.time()
         self.timestamp_manager.record_timestamp(prefill_result["request_id"], 'decoding_finish', decoding_finish)
         for i_req, item_req in enumerate(prefill_result["request_id"]):
@@ -1421,8 +1443,9 @@ class ImprovedConcurrentTester:
 
         total_batch_size = 0  # 用于计算加权平均
 
-        before_select_stats = self.GPU_monitor.check_gpu_stats()
-        print('before_select', before_select_stats)
+        if self.check_gpu_flag:
+            before_select_stats = self.GPU_monitor.check_gpu_stats()
+            print('before_select', before_select_stats)
 
         for request in requests_list:
             request_ids_list.extend(request.request_id)
@@ -1455,17 +1478,18 @@ class ImprovedConcurrentTester:
             merged_result['request_size'] += result['request_size']
             print("batching decoding", merged_result['request_size'])
 
-        after_select_stats = self.GPU_monitor.check_gpu_stats()
-        print('after_select', after_select_stats)
-        print(11111)
+        if self.check_gpu_flag:
+            after_select_stats = self.GPU_monitor.check_gpu_stats()
+            print('after_select', after_select_stats)
 
         # 完成 compression_ratio 的加权平均计算
         if total_batch_size > 0:
             merged_result['compression_ratio'] /= total_batch_size
             merged_result['inputs'] = self._batching_tensors(input_list)
 
-            after_select_stats = self.GPU_monitor.check_gpu_stats()
-            print('_batching_tensors', after_select_stats)
+            if self.check_gpu_flag:
+                after_select_stats = self.GPU_monitor.check_gpu_stats()
+                print('_batching_tensors', after_select_stats)
             if self.use_compression and self.comp_mode == 'ccm':
                 past_key_values_list, comp_duration_time, final_compression_ratio = \
                     self._integrated_compress_ccm(past_key_values_list, merged_result['inputs'], request_ids_list)
@@ -1949,7 +1973,7 @@ def generate_results_txt(metrics, analyze_times_result, system_completion_time, 
     print(f"Report has been saved to {file_path}")
 
 def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
-                model, processor, compressor, max_new_tokens, num_samples,
+                model, processor, compressor, torch_dtype, max_new_tokens, num_samples,
                 compression_ratio_list, device, test_dataloader, max_workers,
                 max_wait_time, worker_check_time, datasets_name, folder_path,
                 gpu_info_path, log_save=True
@@ -1985,6 +2009,7 @@ def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
     # min_batch_threshold = std_batch_threshold_prefill
     # std_batch_threshold_decoding = int(12 / std_batch_threshold_prefill)
 
+
     # 创建测试器
     print("Creating tester...")
     args_ImprovedConcurrentTester = [
@@ -1995,7 +2020,7 @@ def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
 
     # 运行并发测试
     print("\nStarting concurrent testing...")
-    with autocast(dtype=torch.float):
+    with autocast(dtype=torch_dtype):
         metrics, analyze_times_result, \
         system_completion_time, system_total_generated_lens \
             = tester.run_concurrent_test(
@@ -2026,7 +2051,7 @@ def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
 def main():
     # 配置参数
     model_path = "/home/zhujianian/workspace/Uneed/huggingface_download/llava-1.5-7b-hf"
-    ckpt_path = "/home/zhujianian/cvpr/ckpt_store/best_finetune_mlp_1030_mm_8.pth"
+    ckpt_path = "/home/zhujianian/cvpr/ckpt_store/best_finetune_mlp_1030_mm_9.pth"
     json_path = '/home/zhujianian/workspace/Uneed/huggingface_download/LLaVA-Instruct-150K/llava_v1_5_mix665k.json'
     imgsets_path = '/home/zhujianian/cvpr/datasets/'
     # json_path = '/data/huggingface/MileBench/'
@@ -2040,7 +2065,7 @@ def main():
     torch.cuda.manual_seed_all(seed)
 
     # 测试参数配置
-    num_samples = 30  # 测试样本数
+    num_samples = 60  # 测试样本数
     batch_size = 1  # 批处理大小
     max_input_tokens = 128  # 最大输入长度
     max_new_tokens = 512
@@ -2048,9 +2073,10 @@ def main():
     compression_ratio_list = [5., 2.]  # 压缩率
     max_workers = 1  # 并发数
     folder_path = 'results_0110_log'
-    gpu_info_path = None
-    # gpu_info_path = 'gpu_stats_with_stateround_2220.csv'
+    # gpu_info_path = None
+    # gpu_info_path = 'gpu_stats_logs/gpu_stats_with_stateround_1510.csv'
     log_save = True
+    torch_dtype = torch.float16
     # log_save = False
 
     # use_compression = False
@@ -2116,7 +2142,7 @@ def main():
 
     # 加载模型和处理器
     print("Loading model and processor...")
-    model = LlavaForConditionalGeneration.from_pretrained(model_path).to(device)
+    model = LlavaForConditionalGeneration.from_pretrained(model_path, torch_dtype=torch_dtype).to(device)
     processor = LlavaProcessor.from_pretrained(model_path)
 
     # 设置处理器参数
@@ -2130,7 +2156,11 @@ def main():
         src_config=model.config,
         compression_factor=int(compression_ratio_list[0]),
         min_seq_len=2,
-    ).to(device)
+    ).to(device, dtype=torch_dtype)
+
+    # if torch_dtype==torch.float16:
+    #     compressor = compressor.half()
+    #     print('half convert')
 
     # 加载压缩器权重
     print("Loading compressor checkpoint...")
@@ -2161,7 +2191,9 @@ def main():
     # test_setting_list = [[False, 'orig'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
     # test_batching_list = [[1,1,1]]*4
     test_setting_list = [[True, 'ccm']]
-    test_batching_list = [[3, 4, 12]]
+    test_batching_list = [[5, 30, 60]]
+    gpu_info_path = f'gpu_stats_logs/gpu_stats_with_stateround_{test_batching_list[0][0]}{test_batching_list[0][1]}{test_batching_list[0][2]}.csv'
+    # test_batching_list = [[10, 10, 10]]
     # test_batching_list =  [[3,4,12]] + [[2,2,8]]*5
     # test_batching_list =  [[3,4,12]] + [[1,1,8]]*5
     # test_batching_list =  [[3,4,12]] + [[1,1,8]]*5
@@ -2175,7 +2207,7 @@ def main():
         for i_setting, item_setting in enumerate(test_setting_list):
 
             exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
-                model, processor, compressor, max_new_tokens, num_samples,
+                model, processor, compressor, torch_dtype, max_new_tokens, num_samples,
                 compression_ratio_list, device, test_dataloader, max_workers,
                 max_wait_time, worker_check_time, datasets_name, folder_path, gpu_info_path, log_save=log_save
                 )
