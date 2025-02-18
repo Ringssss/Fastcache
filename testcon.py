@@ -25,9 +25,14 @@ from utils_ccm.utils_schedule import *
 v1.0
 最基本的全流程静态并发系统。测量时长无bug。
 
-v1.1 *
+v1.1
 实现pd双队列管理，测试性能。
 于2024.12.26日23点完成。
+
+v1.2 *
+加入测量指标监视器。
+于2024.12.29日21点完成。
+
 
 
 
@@ -35,17 +40,31 @@ v1.1 *
 
 
 
+# @dataclass
+# class TestResult:
+#     method: str  # 'orig' 或 'comp'
+#     latency: List[float]
+#     success: bool
+#     valid_tokens: int = 0
+#     memory_usage: float = 0.0
+#     request_size: int = 0
+#     throughput: float = 0.0
+#     compression_ratio: Optional[float] = None
+#     compression_time: Optional[float] = None
 @dataclass
 class TestResult:
-    method: str  # 'orig' 或 'comp'
+    method: str
     latency: List[float]
     success: bool
-    valid_tokens: int = 0
-    memory_usage: float = 0.0
-    request_size: int = 0
-    throughput: float = 0.0
-    compression_ratio: Optional[float] = None
-    compression_time: Optional[float] = None
+    memory_usage: float
+    request_id : List[str]
+    request_size: int
+    throughput: float
+    valid_tokens: int
+    compression_ratio: float = None
+    compression_time: float = None
+    timestamps: Dict[str, float] = None  # 添加时间戳信息
+
 
 
 class PerformanceMonitor:
@@ -60,6 +79,7 @@ class PerformanceMonitor:
                 'latencies': [],
                 'throughputs': [],
                 'memory_usage': [],
+                'request_id': [],
                 'request_size': [],
                 'success_count': 0,
                 'valid_tokens': 0,
@@ -69,6 +89,7 @@ class PerformanceMonitor:
                 'latencies': [],
                 'throughputs': [],
                 'memory_usage': [],
+                'request_id': [],
                 'request_size': [],
                 'compression_ratios': [],
                 'compression_times': [],
@@ -81,10 +102,12 @@ class PerformanceMonitor:
 
 
     def add_result(self, result: TestResult):
+        print('result.request_id', result.request_id)
         method = result.method
         self.results[method]['latencies'].append(result.latency)
         self.results[method]['throughputs'].append(result.throughput)
         self.results[method]['memory_usage'].append(result.memory_usage)
+        self.results[method]['request_id'].append(result.request_id)
         self.results[method]['request_size'].append(result.request_size)
         self.results[method]['valid_tokens'] += int(result.valid_tokens)
         self.results[method]['success_count'] += int(result.success)
@@ -270,6 +293,7 @@ class ImprovedConcurrentTester:
         self.device = device
         self.timeCheck = TimeTik()
         self.monitor = PerformanceMonitor()
+        self.timestamp_manager = TimestampManager()
         self._init_press_list()
 
     def _init_press_list(self):
@@ -323,7 +347,7 @@ class ImprovedConcurrentTester:
         compressed_past_key_values = compressor(past_key_values, it_len)
         return compressed_past_key_values
 
-    def _exec_compress(self, comp_mode, inputs):
+    def _exec_compress(self, comp_mode, inputs, request_ids_list):
         comp_past_key_values = None
         comp_duration_time = 0
         final_compression_ratio = 0
@@ -331,6 +355,7 @@ class ImprovedConcurrentTester:
 
         if comp_mode == 'ccm':
             prefill_start = time.time()
+            self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_start', prefill_start)
             outputs = self.model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
@@ -339,8 +364,12 @@ class ImprovedConcurrentTester:
                 return_dict=True
             )
             torch.cuda.synchronize()
-            prefill_mid_ = time.time()
-            prefill_time =  prefill_mid_- prefill_start
+            compress_start = time.time()
+            prefill_time =  compress_start- prefill_start
+            # compress_start = time.time()
+            self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_finish', compress_start)
+            self.timestamp_manager.record_timestamp(request_ids_list, 'compress_queueing', compress_start)
+            self.timestamp_manager.record_timestamp(request_ids_list, 'compress_start', compress_start)
 
             # 获取原始KV cache并计算内存占用
             orig_past_key_values = outputs.past_key_values
@@ -351,9 +380,11 @@ class ImprovedConcurrentTester:
             comp_start_time = time.time()
             comp_past_key_values = self.run_compressor(self.compressor,
                                         orig_past_key_values, inputs["attention_mask"], comp_len)
+            compress_finish = time.time()
+            self.timestamp_manager.record_timestamp(request_ids_list, 'compress_finish', compress_finish)
             # print(self.compressor.)
             memory_usage = self._get_kv_cache_memory(comp_past_key_values)
-            comp_duration_time = time.time() - comp_start_time
+            comp_duration_time = compress_finish - comp_start_time
             final_compression_ratio = orig_memory / memory_usage if memory_usage > 0 else 0.0
         elif comp_mode in self.press_type: # other comp
             compression_ratio = 0.5
@@ -362,13 +393,23 @@ class ImprovedConcurrentTester:
             print(press)
             underlying_model = get_underlying_model(self.model)
             prefill_start = time.time()
+            self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_start', prefill_start)
             comp_past_key_values = exec_compression_methods(self.model,
                                           underlying_model, inputs, press,
                                           comp_mode)
+
+            torch.cuda.synchronize()
+            # todo press.totalTime的计时需不需要cuda syn
+            compress_finish = time.time()
             comp_duration_time = press.totalTime
+            prefill_finish = compress_finish-comp_duration_time
+            self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_finish', prefill_finish)
+            self.timestamp_manager.record_timestamp(request_ids_list, 'compress_queueing', prefill_finish)
+            self.timestamp_manager.record_timestamp(request_ids_list, 'compress_start', prefill_finish)
+            self.timestamp_manager.record_timestamp(request_ids_list, 'compress_finish', compress_finish)
             final_compression_ratio = 1/(1-compression_ratio)
-            prefill_fini_ = time.time()
-            prefill_time = prefill_fini_ - prefill_start
+            # prefill_fini_ = time.time()
+            # prefill_time = prefill_fini_ - prefill_start
             # 0.63 0.047 存在很大的系统开销
             print("compress_time", prefill_time, comp_duration_time)
 
@@ -378,143 +419,144 @@ class ImprovedConcurrentTester:
 
         return comp_past_key_values, comp_duration_time, final_compression_ratio, prefill_time
 
-    def _process_batch(self, batch, use_compression=False, comp_mode='ccm'):
-        # server
-        """处理单个批次"""
-        # try:
-        with torch.cuda.stream(torch.cuda.Stream()):
-            # 将输入移到设备上
-            inputs = {
-                'input_ids': batch['input_ids'].to(self.device),
-                'attention_mask': batch['attention_mask'].to(self.device),
-                'pixel_values': batch['pixel_values'].to(self.device)
-            }
-
-            with torch.no_grad(), autocast(dtype=torch.float):
-                # Forward pass 阶段
-                input_ids_forward = inputs["input_ids"][:, :-1]
-                request_size = inputs["input_ids"].shape[0]
-                # outputs = self.model(
-                #     input_ids=input_ids_forward,
-                #     attention_mask=inputs["attention_mask"][:, :-1],
-                #     pixel_values=inputs["pixel_values"],
-                #     use_cache=True,
-                #     return_dict=True
-                # )
-                #
-                # # 获取原始KV cache并计算内存占用
-                # orig_past_key_values = outputs.past_key_values
-                # orig_memory = self._get_kv_cache_memory(orig_past_key_values)
-                input_forward = {
-                    "input_ids": inputs["input_ids"][:, :-1],
-                    "attention_mask": inputs["attention_mask"][:, :-1],
-                    "pixel_values": inputs["pixel_values"]
-                }
-                # 压缩阶段（如果启用）
-                if use_compression:
-                    past_key_values, compression_time, compression_ratio, prefill_time = self._exec_compress(comp_mode, input_forward)
-                    memory_usage = self._get_kv_cache_memory(past_key_values)
-                    # compression_ratio = orig_memory / memory_usage if memory_usage > 0 else 0.0
-                else:
-                    prefill_start = time.time()
-                    outputs = self.model(
-                        input_ids=input_ids_forward,
-                        attention_mask=inputs["attention_mask"][:, :-1],
-                        pixel_values=inputs["pixel_values"],
-                        use_cache=True,
-                        return_dict=True
-                    )
-                    torch.cuda.synchronize()
-                    prefill_finish_ = time.time()
-                    prefill_time = prefill_finish_ - prefill_start
-                    # 获取原始KV cache并计算内存占用
-                    orig_past_key_values = outputs.past_key_values
-                    orig_memory = self._get_kv_cache_memory(orig_past_key_values)
-                    past_key_values = orig_past_key_values
-                    memory_usage = orig_memory
-                    compression_ratio = None
-                    compression_time = 0
-                # prefill_time = time.time() - prefill_start
-
-                # 生成阶段
-                generation_start = time.time()
-
-                # 准备生成输入
-                batch_size = inputs['input_ids'].shape[0]
-                kv_len = past_key_values[0][0].shape[2]
-                kv_attention_mask = torch.cat([
-                    inputs['attention_mask'],
-                    torch.ones(
-                        (batch_size, kv_len - inputs['attention_mask'].shape[1]),
-                        dtype=inputs['attention_mask'].dtype,
-                        device=self.device
-                    )
-                ], dim=-1)
-
-                # 准备generation输入
-                input_ids = torch.cat([kv_attention_mask, inputs['input_ids'][:, -1].unsqueeze(-1)], dim=1)
-                attention_mask = torch.cat([kv_attention_mask, inputs['attention_mask'][:, -1].unsqueeze(-1)], dim=1)
-
-                # 生成文本
-                gen_outputs = self.model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    past_key_values=past_key_values,
-                    max_new_tokens=512 - inputs['input_ids'].shape[1],
-                    do_sample=True,
-                    temperature=0.7,
-                    use_cache=True,
-                    return_dict_in_generate=True,
-                    output_scores=True,
-                )
-
-                # 处理生成的序列并计算性能指标
-                sequences = gen_outputs.sequences
-                start_idx = int(kv_attention_mask.shape[1])
-                generated_sequences = sequences[:, start_idx:]
-
-                decoding_time = time.time() - generation_start
-
-                #todo waiting time
-
-                # todo valid_lens
-                valid_lens = self.find_valid_lens(generated_sequences, self.processor.tokenizer.eos_token_id)
-                # valid_lens = generated_sequences.numel()
-                throughput = valid_lens / decoding_time if decoding_time > 0 else 0
-
-                tokens_time = decoding_time / valid_lens
-                latency = [0, prefill_time, tokens_time]
-
-                # 清理GPU内存
-                torch.cuda.empty_cache()
-
-                return TestResult(
-                    method='comp' if use_compression else 'orig',
-                    latency=latency,  # 只使用生成时间作为延迟
-                    success=True,
-                    memory_usage=memory_usage,
-                    request_size=request_size,
-                    throughput=throughput,
-                    valid_tokens=valid_lens,
-                    compression_ratio=compression_ratio,
-                    compression_time=compression_time,
-
-                )
-
-        # except Exception as e:
-        #     print(f"Error in batch processing: {str(e)}")
-        #     return TestResult(
-        #         method='comp' if use_compression else 'orig',
-        #         latency=0,
-        #         success=False,
-        #         memory_usage=0,
-        #         request_size=0,
-        #         compression_time=0,
-        #         throughput=0,
-        #         valid_tokens=0,
-        #         compression_ratio=None,
-        #         compression_time=None
-        #     )
+    # def _process_batch(self, batch, use_compression=False, comp_mode='ccm'):
+    #     # server
+    #     """处理单个批次"""
+    #     # try:
+    #     with torch.cuda.stream(torch.cuda.Stream()):
+    #         # 将输入移到设备上
+    #         inputs = {
+    #             'input_ids': batch['input_ids'].to(self.device),
+    #             'attention_mask': batch['attention_mask'].to(self.device),
+    #             'pixel_values': batch['pixel_values'].to(self.device)
+    #         }
+    #
+    #         with torch.no_grad(), autocast(dtype=torch.float):
+    #             # Forward pass 阶段
+    #             input_ids_forward = inputs["input_ids"][:, :-1]
+    #             request_size = inputs["input_ids"].shape[0]
+    #             # outputs = self.model(
+    #             #     input_ids=input_ids_forward,
+    #             #     attention_mask=inputs["attention_mask"][:, :-1],
+    #             #     pixel_values=inputs["pixel_values"],
+    #             #     use_cache=True,
+    #             #     return_dict=True
+    #             # )
+    #             #
+    #             # # 获取原始KV cache并计算内存占用
+    #             # orig_past_key_values = outputs.past_key_values
+    #             # orig_memory = self._get_kv_cache_memory(orig_past_key_values)
+    #             input_forward = {
+    #                 "input_ids": inputs["input_ids"][:, :-1],
+    #                 "attention_mask": inputs["attention_mask"][:, :-1],
+    #                 "pixel_values": inputs["pixel_values"]
+    #             }
+    #             # 压缩阶段（如果启用）
+    #             if use_compression:
+    #                 past_key_values, compression_time, compression_ratio, \
+    #                     prefill_time = self._exec_compress(comp_mode, input_forward)
+    #                 memory_usage = self._get_kv_cache_memory(past_key_values)
+    #                 # compression_ratio = orig_memory / memory_usage if memory_usage > 0 else 0.0
+    #             else:
+    #                 prefill_start = time.time()
+    #                 outputs = self.model(
+    #                     input_ids=input_ids_forward,
+    #                     attention_mask=inputs["attention_mask"][:, :-1],
+    #                     pixel_values=inputs["pixel_values"],
+    #                     use_cache=True,
+    #                     return_dict=True
+    #                 )
+    #                 torch.cuda.synchronize()
+    #                 prefill_finish_ = time.time()
+    #                 prefill_time = prefill_finish_ - prefill_start
+    #                 # 获取原始KV cache并计算内存占用
+    #                 orig_past_key_values = outputs.past_key_values
+    #                 orig_memory = self._get_kv_cache_memory(orig_past_key_values)
+    #                 past_key_values = orig_past_key_values
+    #                 memory_usage = orig_memory
+    #                 compression_ratio = None
+    #                 compression_time = 0
+    #             # prefill_time = time.time() - prefill_start
+    #
+    #             # 生成阶段
+    #             generation_start = time.time()
+    #
+    #             # 准备生成输入
+    #             batch_size = inputs['input_ids'].shape[0]
+    #             kv_len = past_key_values[0][0].shape[2]
+    #             kv_attention_mask = torch.cat([
+    #                 inputs['attention_mask'],
+    #                 torch.ones(
+    #                     (batch_size, kv_len - inputs['attention_mask'].shape[1]),
+    #                     dtype=inputs['attention_mask'].dtype,
+    #                     device=self.device
+    #                 )
+    #             ], dim=-1)
+    #
+    #             # 准备generation输入
+    #             input_ids = torch.cat([kv_attention_mask, inputs['input_ids'][:, -1].unsqueeze(-1)], dim=1)
+    #             attention_mask = torch.cat([kv_attention_mask, inputs['attention_mask'][:, -1].unsqueeze(-1)], dim=1)
+    #
+    #             # 生成文本
+    #             gen_outputs = self.model.generate(
+    #                 input_ids=input_ids,
+    #                 attention_mask=attention_mask,
+    #                 past_key_values=past_key_values,
+    #                 max_new_tokens=512 - inputs['input_ids'].shape[1],
+    #                 do_sample=True,
+    #                 temperature=0.7,
+    #                 use_cache=True,
+    #                 return_dict_in_generate=True,
+    #                 output_scores=True,
+    #             )
+    #
+    #             # 处理生成的序列并计算性能指标
+    #             sequences = gen_outputs.sequences
+    #             start_idx = int(kv_attention_mask.shape[1])
+    #             generated_sequences = sequences[:, start_idx:]
+    #
+    #             decoding_time = time.time() - generation_start
+    #
+    #             #todo waiting time
+    #
+    #             # todo valid_lens
+    #             valid_lens = self.find_valid_lens(generated_sequences, self.processor.tokenizer.eos_token_id)
+    #             # valid_lens = generated_sequences.numel()
+    #             throughput = valid_lens / decoding_time if decoding_time > 0 else 0
+    #
+    #             tokens_time = decoding_time / valid_lens
+    #             latency = [0, prefill_time, tokens_time]
+    #
+    #             # 清理GPU内存
+    #             torch.cuda.empty_cache()
+    #
+    #             return TestResult(
+    #                 method='comp' if use_compression else 'orig',
+    #                 latency=latency,  # 只使用生成时间作为延迟
+    #                 success=True,
+    #                 memory_usage=memory_usage,
+    #                 request_size=request_size,
+    #                 throughput=throughput,
+    #                 valid_tokens=valid_lens,
+    #                 compression_ratio=compression_ratio,
+    #                 compression_time=compression_time,
+    #
+    #             )
+    #
+    #     # except Exception as e:
+    #     #     print(f"Error in batch processing: {str(e)}")
+    #     #     return TestResult(
+    #     #         method='comp' if use_compression else 'orig',
+    #     #         latency=0,
+    #     #         success=False,
+    #     #         memory_usage=0,
+    #     #         request_size=0,
+    #     #         compression_time=0,
+    #     #         throughput=0,
+    #     #         valid_tokens=0,
+    #     #         compression_ratio=None,
+    #     #         compression_time=None
+    #     #     )
 
     def _batching_tensors(self, dict_list):
         """
@@ -607,6 +649,7 @@ class ImprovedConcurrentTester:
         if not requests_list:
             return {}
 
+
         merged_result = {
             'past_key_values': [],  # 按顺序连接
             'memory_usage': 0,  # 取最大值
@@ -614,14 +657,17 @@ class ImprovedConcurrentTester:
             'compression_time': 0,  # 累加
             'prefill_time': 0,  # 累加
             'inputs': [],  # 按顺序连接
+            'request_id' : [],
             'request_size': 0  # 累加
         }
         past_key_values_list = []
         input_list = []
+        request_ids_list = []
 
         total_batch_size = 0  # 用于计算加权平均
 
         for request in requests_list:
+            request_ids_list.extend(request.request_id)
             result = request.batch
             # past_key_values 连接
             past_key_values_list.append(result['past_key_values'])
@@ -653,9 +699,12 @@ class ImprovedConcurrentTester:
             merged_result['compression_ratio'] /= total_batch_size
             merged_result['inputs'] = self._batching_tensors(input_list)
             merged_result['past_key_values'] = self.merge_kv_cache(past_key_values_list)
+            merged_result['request_id'] = request_ids_list
+            print("merged_result['request_id']", merged_result['request_id'])
 
         return merged_result
 
+    # here
     def run_concurrent_test(self, dataloader, max_workers=4, num_samples=10, max_serve_batch_size=8,
                             min_batch_threshold=4, max_wait_time=5., worker_check_time=0.01, req_per_sec=1., use_compression=False):
         """
@@ -710,10 +759,16 @@ class ImprovedConcurrentTester:
             time.sleep(1 / req_per_sec)
             print(f'send {i}')
 
+            timestamps = time.time()
+
             # 创建请求对象并添加到调度器
             request = PriorityRequest(batch=batch,
                                       request_type='prefill',
-                                      arrival_time=time.time())
+                                      arrival_time=timestamps)
+            print(request.request_id)
+            self.timestamp_manager.create_request(request.request_id)
+            # timestamps = time.time()
+            self.timestamp_manager.record_timestamp(request.request_id, 'prefill_queueing_start', timestamps)
             middleware.scheduler.add_request(request, 'prefill')
 
     def _dispatch_requests(self, middleware, num_batches, use_compression, worker_check_time=0.01):
@@ -729,7 +784,6 @@ class ImprovedConcurrentTester:
             if middleware.idle_workers > 0:
                 # 使用调度器选择要处理的批次
                 selected_batch, mode = middleware.scheduler.select_batch()
-                print()
                 print("middleware.idle_workers", middleware.idle_workers)
 
             if selected_batch and middleware.idle_workers > 0:
@@ -742,9 +796,15 @@ class ImprovedConcurrentTester:
                     # 处理prefill请求
                     comp_mode = 'ccm'
                     batches_tensor = self._batching_tensors([req.batch for req in selected_batch])
+                    # request_ids_list = ([[].extend(req.request_id) for req in selected_batch])
+                    request_ids_list = []
+                    for req in selected_batch:
+                        request_ids_list.extend(req.request_id)
+                    # print('request_ids_list_process_prefill_wrapper', request_ids_list)
                     future = middleware.executor.submit(
                         self._process_prefill_wrapper,
                         batches_tensor,  # 提取batch数据
+                        request_ids_list,
                         middleware,
                         batch_start_time,
                         use_compression,
@@ -752,9 +812,10 @@ class ImprovedConcurrentTester:
                     )
                     future.add_done_callback(self._on_prefill_complete)
                 else:
-
                     # 处理decoding请求
+
                     results_batched = self._merge_prefill_results(selected_batch)
+
                     # todo 时间测量层面之后再梳理
                     future = middleware.executor.submit(
                         self._process_decoding_wrapper,
@@ -778,6 +839,7 @@ class ImprovedConcurrentTester:
         # 等待所有任务完成
         middleware.executor.shutdown(wait=True)
         total_time = time.time() - middleware.start_time
+        print(self.timestamp_manager.timestamps_map)
 
         # 输出服务统计信息
         logging.info(f"Service completed in {total_time:.2f} seconds")
@@ -822,7 +884,7 @@ class ImprovedConcurrentTester:
         torch.cuda.empty_cache()
         print('1finisl')
 
-    def _process_prefill_wrapper(self, batches, middleware, batch_start_time, use_compression, comp_mode):
+    def _process_prefill_wrapper(self, batches, request_ids_list, middleware, batch_start_time, use_compression, comp_mode):
         """包装批处理函数，添加时间统计"""
         result = None
         # try:
@@ -836,7 +898,7 @@ class ImprovedConcurrentTester:
         #         middleware.processed_batches += batches['input_ids'].shape[0]
         #         middleware.completion_event.set()
         #     return result
-        result, batch_size, seq_lens, processing_time, memory_usage = self._process_prefill(batches,
+        result, batch_size, seq_lens, processing_time, memory_usage = self._process_prefill(batches, request_ids_list,
                                                                         use_compression, comp_mode)  # 需要修改原始_process_batch以支持批处理
         # 更新性能指标
         middleware.scheduler.update_performance({
@@ -850,20 +912,23 @@ class ImprovedConcurrentTester:
         middleware.batch_times.append(process_time)
         request = PriorityRequest(batch=result,
                                   request_type='decoding',
-                                  arrival_time=time.time())
+                                  arrival_time=time.time(),
+                                  request_id=result['request_id'])
 
         with middleware.idle_lock:
             middleware.idle_workers += 1
             # print("batches", batches['input_ids'].shape)
             middleware.processed_prefill_batches += batches['input_ids'].shape[0]
             # todo 优化空间 add_request能否外移
+            decoding_queueing = time.time()
+            self.timestamp_manager.record_timestamp(request_ids_list, 'decoding_queueing', decoding_queueing)
             middleware.scheduler.add_request(request, 'decoding')
             print(middleware.scheduler.prefill_count, middleware.scheduler.decoding_count)
             middleware.completion_event.set()
         return result
 
 
-    def _process_prefill(self, batch, use_compression, comp_mode):
+    def _process_prefill(self, batch, request_ids_list, use_compression, comp_mode):
         """处理prefill阶段，返回KV Cache等中间结果"""
         with torch.cuda.stream(torch.cuda.Stream()):
             # 准备输入
@@ -883,13 +948,16 @@ class ImprovedConcurrentTester:
                     "pixel_values": inputs["pixel_values"]
                 }
 
-                prefill_start = time.time()
+
                 if use_compression:
                     # 使用压缩模式
                     past_key_values, compression_time, compression_ratio, prefill_time = \
-                        self._exec_compress(comp_mode, input_forward)
+                        self._exec_compress(comp_mode, input_forward, request_ids_list)
                     memory_usage = self._get_kv_cache_memory(past_key_values)
                 else:
+                    prefill_start = time.time()
+                    # timestamps = time.time()
+                    self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_start', prefill_start)
                     # 不使用压缩
                     outputs = self.model(
                         input_ids=input_forward["input_ids"],
@@ -898,7 +966,12 @@ class ImprovedConcurrentTester:
                         use_cache=True,
                         return_dict=True
                     )
-                    prefill_time = time.time() - prefill_start
+                    prefill_over = time.time()
+                    prefill_time = prefill_over - prefill_start
+                    self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_finish', prefill_over)
+                    self.timestamp_manager.record_timestamp(request_ids_list, 'compress_queueing', prefill_over)
+                    self.timestamp_manager.record_timestamp(request_ids_list, 'compress_start', prefill_over)
+                    self.timestamp_manager.record_timestamp(request_ids_list, 'compress_finish', prefill_over)
                     past_key_values = outputs.past_key_values
                     memory_usage = self._get_kv_cache_memory(past_key_values)
                     compression_ratio = None
@@ -934,14 +1007,14 @@ class ImprovedConcurrentTester:
                     'compression_time': compression_time,
                     'prefill_time': prefill_time,
                     'inputs': inputs,  # 保存原始输入供decoding阶段使用
-                    'request_size': batch_size
+                    'request_size': batch_size,
+                    'request_id': request_ids_list
                 }
                 return prefill_result, batch_size, seq_lens, prefill_time, memory_usage
 
 
     def _process_decoding_wrapper(self, prefill_result, middleware, batch_start_time):
         """包装批处理函数，添加时间统计"""
-        result = None
         # try:
         #     result = self._process_batch(batches, use_compression, comp_mode=comp_mode)  # 需要修改原始_process_batch以支持批处理
         #     process_time = time.time() - batch_start_time
@@ -953,15 +1026,20 @@ class ImprovedConcurrentTester:
         #         middleware.processed_batches += batches['input_ids'].shape[0]
         #         middleware.completion_event.set()
         #     return result
-        print(1111)
-        result, batch_size, valid_lens, decoding_time, throughput = self._process_decoding(prefill_result)  # 需要修改原始_process_batch以支持批处理
+        decode_start = time.time()
+        self.timestamp_manager.record_timestamp(prefill_result["request_id"], 'decode_start', decode_start)
+        result, batch_size, valid_lens, decoding_time, throughput = self._process_decoding(prefill_result)
+        decoding_finish = time.time()
+        self.timestamp_manager.record_timestamp(prefill_result["request_id"], 'decoding_finish', decoding_finish)
+        # 需要修改原始_process_batch以支持批处理
         # 更新性能指标
         middleware.scheduler.update_performance({
             'stage': 'decoding',
             'batch_size': batch_size,
             'tokens_generated': valid_lens,
             'processing_time': decoding_time,
-            'throughput': throughput
+            'throughput': throughput,
+
         })
         process_time = time.time() - batch_start_time
         middleware.batch_times.append(process_time)
@@ -1036,6 +1114,7 @@ class ImprovedConcurrentTester:
                 method='comp' if prefill_result['compression_ratio'] else 'orig',
                 latency=[0, prefill_result['prefill_time'], decoding_time / valid_lens],
                 success=True,
+                request_id= prefill_result["request_id"],
                 memory_usage=prefill_result['memory_usage'],
                 request_size=prefill_result['request_size'],
                 throughput=throughput,
@@ -1159,6 +1238,37 @@ def load_checkpoint_only_model(model, filename, device=None):
 #         remaining_text = text
 #     return remaining_text, is_exist_flag
 
+# def load_image_data(json_path: str, imgsets_path: str, num_samples: int, mode=1) -> List[str]:
+#     """加载图像数据"""
+#     target_datasets = ['gqa']
+#     with open(json_path, 'r') as f:
+#         data = json.load(f)
+#     data = [d for d in data if 'image' in d.keys() and d['image'].split('/')[0] in target_datasets]
+#     random.shuffle(data)
+#
+#     if num_samples < 0:
+#         target_data = data
+#     else:
+#         target_data = data[:num_samples]
+#
+#     target_texts_image = []
+#     for d in target_data:
+#         if d['conversations'] and d['conversations'][0]["from"] == "human":
+#             questions_list = []
+#             answers_list = []
+#             for d_sentence in d['conversations']:
+#                 if d_sentence['from'] == 'human':
+#                     questions_list.append((
+#                         f"USER: <image> \nWhat's the content of the image? I am sick. "
+#                         f"Please describe every detail in the image with specific and detailed language. ASSISTANT:",
+#                         Image.open(f"{imgsets_path}{d['image']}").convert("RGB")
+#                     ))
+#                     answers_list.append(1)
+#                 else:
+#                     answers_list.append(d_sentence['value'])
+#             target_texts_image.append([questions_list, answers_list])
+#
+#     return target_texts_image
 def load_image_data(json_path: str, imgsets_path: str, num_samples: int, mode=1) -> List[str]:
     """加载图像数据"""
     target_datasets = ['gqa']
@@ -1166,12 +1276,12 @@ def load_image_data(json_path: str, imgsets_path: str, num_samples: int, mode=1)
         data = json.load(f)
     data = [d for d in data if 'image' in d.keys() and d['image'].split('/')[0] in target_datasets]
     random.shuffle(data)
-    
+
     if num_samples < 0:
         target_data = data
     else:
         target_data = data[:num_samples]
-    
+
     target_texts_image = []
     for d in target_data:
         if d['conversations'] and d['conversations'][0]["from"] == "human":
@@ -1188,9 +1298,8 @@ def load_image_data(json_path: str, imgsets_path: str, num_samples: int, mode=1)
                 else:
                     answers_list.append(d_sentence['value'])
             target_texts_image.append([questions_list, answers_list])
-    
-    return target_texts_image
 
+    return target_texts_image
 def print_metrics(metrics: Dict[str, Dict[str, float]]):
     """打印性能指标"""
     print("\n=== Performance Test Results ===")
