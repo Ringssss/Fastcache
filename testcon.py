@@ -46,6 +46,9 @@ v1.3
 v1.3.1 *
 指标测量改动。ccm超参最优。
 
+v1.4
+结束cuda.syn的保护，由此带来大批涨速。
+
 
 """
 
@@ -422,8 +425,13 @@ class ImprovedConcurrentTester:
         past_key_values_list_final = []
         comp_past_key_values_list = []
         # print("past_key_values_list", len(past_key_values_list), len(past_key_values_list[0]))
+
+        start_split_time = time.time()
         for past_key_values in past_key_values_list:
             past_key_values_list_final.extend(self._split_past_kv_multi_batch(past_key_values))
+
+        print(len(past_key_values_list_final))
+        print("start_split_time", time.time() - start_split_time)
         compress_batch_size = self.compress_batch
         start_p = 0
         comp_duration_time = 0
@@ -448,7 +456,9 @@ class ImprovedConcurrentTester:
             comp_past_key_values = self.run_compressor(self.compressor,
                                                        orig_past_key_values, comp_len)
             # print("comp_past_key_values", comp_past_key_values[0][0].shape)
-            torch.cuda.synchronize()
+            # torch.cuda.synchronize()
+            _ = comp_past_key_values[0][0].shape # torch.cuda.synchronize()代替
+
             compress_finish = time.time()
             self.timestamp_manager.record_timestamp(request_ids_list[start_p:end_p], 'compress_finish', compress_finish)
             self.timestamp_manager.record_timestamp(request_ids_list[start_p:end_p], 'decoding_queueing',
@@ -513,16 +523,18 @@ class ImprovedConcurrentTester:
                 use_cache=True,
                 return_dict=True
             )
-            torch.cuda.synchronize()
+            # 获取原始KV cache并计算内存占用
+            # orig_past_key_values = outputs.past_key_values
+            # torch.cuda.synchronize()
             prefill_finish = time.time()
             prefill_time = prefill_finish - prefill_start
             # compress_start = time.time()
             self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_finish', prefill_finish)
+            orig_past_key_values = outputs.past_key_values
             # self.timestamp_manager.record_timestamp(request_ids_list, 'compress_queueing', prefill_finish)
             # self.timestamp_manager.record_timestamp(request_ids_list, 'compress_start', compress_start)
 
-            # 获取原始KV cache并计算内存占用
-            orig_past_key_values = outputs.past_key_values
+
             # ccm方法则直接传送
             # orig_memory = self._get_kv_cache_memory(orig_past_key_values)
             # # past_key_values_split = self._split_past_kv_multi_batch(orig_past_key_values)
@@ -550,7 +562,8 @@ class ImprovedConcurrentTester:
                                                             underlying_model, inputs, press,
                                                             comp_mode)
 
-            torch.cuda.synchronize()
+            _ = comp_past_key_values[0][0].shape
+            # torch.cuda.synchronize()
             # todo press.totalTime的计时需不需要cuda syn
             compress_finish = time.time()
             comp_duration_time = press.totalTime
@@ -933,8 +946,10 @@ class ImprovedConcurrentTester:
         # prefill_result = future.result()
         # torch.cuda.empty_cache()
         with torch.cuda.stream(self.cuda_stream):
+            stop_time = time.time()
             torch.cuda.current_stream().synchronize()
             torch.cuda.empty_cache()
+            print('stop_time', time.time()-stop_time)
 
     def _on_decoding_complete(self, future):
         """Decoding完成的回调"""
@@ -1034,6 +1049,9 @@ class ImprovedConcurrentTester:
                         past_key_values, compression_time, compression_ratio, prefill_time = \
                             self._exec_compress(comp_mode, input_forward, request_ids_list)
                         memory_usage = self._get_kv_cache_memory(past_key_values)
+                        # if comp_mode =="ccm":
+                        #     prefill_finish = time.time()
+                        #     self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_finish', prefill_finish)
                     else:
                         prefill_start = time.time()
                         # timestamps = time.time()
@@ -1046,17 +1064,18 @@ class ImprovedConcurrentTester:
                             use_cache=True,
                             return_dict=True
                         )
+                        # torch.cuda.synchronize()
+                        past_key_values = outputs.past_key_values
+                        memory_usage = self._get_kv_cache_memory(past_key_values)
                         prefill_over = time.time()
                         prefill_time = prefill_over - prefill_start
                         self.timestamp_manager.record_timestamp(request_ids_list, 'prefill_finish', prefill_over)
                         self.timestamp_manager.record_timestamp(request_ids_list, 'compress_queueing', prefill_over)
                         self.timestamp_manager.record_timestamp(request_ids_list, 'compress_start', prefill_over)
                         self.timestamp_manager.record_timestamp(request_ids_list, 'compress_finish', prefill_over)
-                        past_key_values = outputs.past_key_values
-                        memory_usage = self._get_kv_cache_memory(past_key_values)
                         # past_key_values_split = self._split_past_kv_multi_batch(past_key_values)
                         # print(len(past_key_values_split))
-                        compression_ratio = None
+                        compression_ratio = 1.
                         compression_time = 0
 
                     # # 准备生成输入
@@ -1314,6 +1333,7 @@ class ImprovedConcurrentTester:
             # compression_ratio 加权平均
             batch_size = result['request_size']
             total_batch_size += batch_size
+
             merged_result['compression_ratio'] += (
                     result['compression_ratio'] * batch_size
             )
@@ -1653,9 +1673,10 @@ def main():
     compression_ratio_list = [5., 2.]  # 压缩率
     max_workers = 1  # 并发数
 
+    # use_compression = False
     use_compression = True
-    # comp_mode = 'ccm'
-    comp_mode = 'Knorm'
+    comp_mode = 'ccm'
+    # comp_mode = 'Knorm'
     # comp_mode = 'StreamingLLM'
     # comp_mode = 'RandomPress'
     # comp_mode = 'SnapKV'
@@ -1669,11 +1690,11 @@ def main():
     # min_batch_threshold = 10
     # max_wait_time = 5
     req_per_sec = 10.
-    std_batch_threshold_prefill = 2
-    compress_batch = 3
+    std_batch_threshold_prefill = 10
+    compress_batch = 1
     max_serve_batch_size = std_batch_threshold_prefill  # 测试批次数
     min_batch_threshold = std_batch_threshold_prefill
-    std_batch_threshold_decoding = int(10 / std_batch_threshold_prefill)
+    std_batch_threshold_decoding = int(20 / std_batch_threshold_prefill)
     max_wait_time = 5
     worker_check_time = 0.5
 
@@ -1746,7 +1767,7 @@ def main():
     print(analyze_times_result)
     print(f"Service completed in {system_completion_time:.2f} seconds.")
     print(f"Service generated {system_total_generated_lens} tokens.")
-    print(f"Thoughtput: {system_total_generated_lens/system_completion_time:.2f} tokens/s.")
+    print(f"Thoughtput: {system_total_generated_lens/(system_completion_time+1e-5):.2f} tokens/s.")
 
     # 保存结果
     with open(output_path, 'w') as f:
