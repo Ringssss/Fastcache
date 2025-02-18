@@ -7,6 +7,7 @@ from tqdm import tqdm
 import random
 from datetime import datetime
 from PIL import Image
+from pathlib import Path
 from dataclasses import dataclass
 import statistics
 import logging
@@ -48,6 +49,9 @@ v1.3.1 *
 
 v1.4
 结束cuda.syn的保护，由此带来大批涨速。
+
+v2.0
+更改使用模式，成为完整的批量使用样例。
 
 
 """
@@ -175,7 +179,7 @@ class PerformanceMonitor:
                 "min_tpot": min(sorted_tpot),
                 "max_tpot": max(sorted_tpot),
                 "avg_memory_usage": statistics.mean(data['memory_usage']),
-                "avg_throughput": data['valid_tokens'] / duration,
+                "avg_throughput": data['valid_tokens'] / (duration+1e-5),
                 # "avg_throughput": statistics.mean(data['throughputs']),
                 "throughput_stddev": statistics.stdev(data['throughputs']) if len(data['throughputs']) > 1 else 0
             }
@@ -188,92 +192,6 @@ class PerformanceMonitor:
                 })
 
         return metrics
-
-    # def calculate_metrics(self):
-    #     metrics = {}
-    #     duration = time.time() - self.start_time
-    #
-    #     for method, data in self.results.items():
-    #         if not data['latencies']:
-    #             continue
-    #         ttft_list, tpot_list = self.proc_latencies()
-    #
-    #         sorted_ttft = sorted(ttft_list)
-    #         sorted_tpot = sorted(tpot_list)
-    #         total = len(sorted_ttft)
-    #         p50_idx = int(total * 0.5)
-    #         p90_idx = int(total * 0.90)
-    #         p99_idx = min(int(total * 0.99), total - 1)
-    #         metrics[method] = {
-    #             "total_requests": data['total_count'],
-    #             "success_rate": (data['success_count'] / data['total_count'] * 100) if data['total_count'] > 0 else 0,
-    #             "requests_per_second": data['total_count'] / duration if duration > 0 else 0,
-    #             "avg_ttft": statistics.mean(sorted_ttft),
-    #             "median_ttft": sorted_ttft[p50_idx],
-    #             "p90_ttft": sorted_ttft[p90_idx],
-    #             "p99_ttft": sorted_ttft[p99_idx],
-    #             "min_ttft": min(sorted_ttft),
-    #             "max_ttft": max(sorted_ttft),
-    #             "avg_tpot": statistics.mean(sorted_tpot),
-    #             "median_tpot": sorted_tpot[p50_idx],
-    #             "p90_tpot": sorted_tpot[p90_idx],
-    #             "p99_tpot": sorted_tpot[p99_idx],
-    #             "min_tpot": min(sorted_tpot),
-    #             "max_tpot": max(sorted_tpot),
-    #             "avg_memory_usage": statistics.mean(data['memory_usage']),
-    #             "avg_throughput": data['valid_tokens'] / duration,
-    #             # "avg_throughput": statistics.mean(data['throughputs']),
-    #             "throughput_stddev": statistics.stdev(data['throughputs']) if len(data['throughputs']) > 1 else 0
-    #         }
-    #
-    #         if method == 'comp' and data.get('compression_ratios'):
-    #             metrics[method].update({
-    #                 "avg_compression_ratio": statistics.mean(data['compression_ratios']),
-    #                 "avg_compression_time": statistics.mean(data['compression_times']) if data[
-    #                     'compression_times'] else 0
-    #             })
-    #
-    #     return metrics
-
-    # def calculate_metrics(self):
-    #     metrics = {}
-    #     duration = time.time() - self.start_time
-    #
-    #     ttft_list, tpot_list = self.proc_latencies()
-    #
-    #     for method, data in self.results.items():
-    #         if not data['latencies']:
-    #             continue
-    #
-    #         sorted_latencies = sorted(data['latencies'])
-    #         total = len(sorted_latencies)
-    #         p50_idx = int(total * 0.5)
-    #         p95_idx = int(total * 0.95)
-    #         p99_idx = min(int(total * 0.99), total - 1)
-    #         metrics[method] = {
-    #             "total_requests": data['total_count'],
-    #             "success_rate": (data['success_count'] / data['total_count'] * 100) if data['total_count'] > 0 else 0,
-    #             "requests_per_second": data['total_count'] / duration if duration > 0 else 0,
-    #             "avg_latency": statistics.mean(data['latencies']),
-    #             "median_latency": sorted_latencies[p50_idx],
-    #             "p95_latency": sorted_latencies[p95_idx],
-    #             "p99_latency": sorted_latencies[p99_idx],
-    #             "min_latency": min(sorted_latencies),
-    #             "max_latency": max(sorted_latencies),
-    #             "avg_memory_usage": statistics.mean(data['memory_usage']),
-    #             "avg_throughput": data['valid_tokens']/duration,
-    #             # "avg_throughput": statistics.mean(data['throughputs']),
-    #             "throughput_stddev": statistics.stdev(data['throughputs']) if len(data['throughputs']) > 1 else 0
-    #         }
-    #
-    #         if method == 'comp' and data.get('compression_ratios'):
-    #             metrics[method].update({
-    #                 "avg_compression_ratio": statistics.mean(data['compression_ratios']),
-    #                 "avg_compression_time": statistics.mean(data['compression_times']) if data['compression_times'] else 0
-    #             })
-    #
-    #     return metrics
-
 
 class ServiceMiddleware:
     def __init__(self, max_workers, max_serve_batch_size, min_batch_threshold, std_batch_threshold_decoding,
@@ -585,145 +503,6 @@ class ImprovedConcurrentTester:
         # self.timeCheck.show_and_reset()
 
         # return comp_past_key_values, comp_duration_time, final_compression_ratio, prefill_time
-
-    # def _process_batch(self, batch, use_compression=False, comp_mode='ccm'):
-    #     # server
-    #     """处理单个批次"""
-    #     # try:
-    #     with torch.cuda.stream(torch.cuda.Stream()):
-    #         # 将输入移到设备上
-    #         inputs = {
-    #             'input_ids': batch['input_ids'].to(self.device),
-    #             'attention_mask': batch['attention_mask'].to(self.device),
-    #             'pixel_values': batch['pixel_values'].to(self.device)
-    #         }
-    #
-    #         with torch.no_grad(), autocast(dtype=torch.float):
-    #             # Forward pass 阶段
-    #             input_ids_forward = inputs["input_ids"][:, :-1]
-    #             request_size = inputs["input_ids"].shape[0]
-    #             # outputs = self.model(
-    #             #     input_ids=input_ids_forward,
-    #             #     attention_mask=inputs["attention_mask"][:, :-1],
-    #             #     pixel_values=inputs["pixel_values"],
-    #             #     use_cache=True,
-    #             #     return_dict=True
-    #             # )
-    #             #
-    #             # # 获取原始KV cache并计算内存占用
-    #             # orig_past_key_values = outputs.past_key_values
-    #             # orig_memory = self._get_kv_cache_memory(orig_past_key_values)
-    #             input_forward = {
-    #                 "input_ids": inputs["input_ids"][:, :-1],
-    #                 "attention_mask": inputs["attention_mask"][:, :-1],
-    #                 "pixel_values": inputs["pixel_values"]
-    #             }
-    #             # 压缩阶段（如果启用）
-    #             if use_compression:
-    #                 past_key_values, compression_time, compression_ratio, \
-    #                     prefill_time = self._exec_compress(comp_mode, input_forward)
-    #                 memory_usage = self._get_kv_cache_memory(past_key_values)
-    #                 # compression_ratio = orig_memory / memory_usage if memory_usage > 0 else 0.0
-    #             else:
-    #                 prefill_start = time.time()
-    #                 outputs = self.model(
-    #                     input_ids=input_ids_forward,
-    #                     attention_mask=inputs["attention_mask"][:, :-1],
-    #                     pixel_values=inputs["pixel_values"],
-    #                     use_cache=True,
-    #                     return_dict=True
-    #                 )
-    #                 torch.cuda.synchronize()
-    #                 prefill_finish_ = time.time()
-    #                 prefill_time = prefill_finish_ - prefill_start
-    #                 # 获取原始KV cache并计算内存占用
-    #                 orig_past_key_values = outputs.past_key_values
-    #                 orig_memory = self._get_kv_cache_memory(orig_past_key_values)
-    #                 past_key_values = orig_past_key_values
-    #                 memory_usage = orig_memory
-    #                 compression_ratio = None
-    #                 compression_time = 0
-    #             # prefill_time = time.time() - prefill_start
-    #
-    #             # 生成阶段
-    #             generation_start = time.time()
-    #
-    #             # 准备生成输入
-    #             batch_size = inputs['input_ids'].shape[0]
-    #             kv_len = past_key_values[0][0].shape[2]
-    #             kv_attention_mask = torch.cat([
-    #                 inputs['attention_mask'],
-    #                 torch.ones(
-    #                     (batch_size, kv_len - inputs['attention_mask'].shape[1]),
-    #                     dtype=inputs['attention_mask'].dtype,
-    #                     device=self.device
-    #                 )
-    #             ], dim=-1)
-    #
-    #             # 准备generation输入
-    #             input_ids = torch.cat([kv_attention_mask, inputs['input_ids'][:, -1].unsqueeze(-1)], dim=1)
-    #             attention_mask = torch.cat([kv_attention_mask, inputs['attention_mask'][:, -1].unsqueeze(-1)], dim=1)
-    #
-    #             # 生成文本
-    #             gen_outputs = self.model.generate(
-    #                 input_ids=input_ids,
-    #                 attention_mask=attention_mask,
-    #                 past_key_values=past_key_values,
-    #                 max_new_tokens=512 - inputs['input_ids'].shape[1],
-    #                 do_sample=True,
-    #                 temperature=0.7,
-    #                 use_cache=True,
-    #                 return_dict_in_generate=True,
-    #                 output_scores=True,
-    #             )
-    #
-    #             # 处理生成的序列并计算性能指标
-    #             sequences = gen_outputs.sequences
-    #             start_idx = int(kv_attention_mask.shape[1])
-    #             generated_sequences = sequences[:, start_idx:]
-    #
-    #             decoding_time = time.time() - generation_start
-    #
-    #             #todo waiting time
-    #
-    #             # todo valid_lens
-    #             valid_lens = self.find_valid_lens(generated_sequences, self.processor.tokenizer.eos_token_id)
-    #             # valid_lens = generated_sequences.numel()
-    #             throughput = valid_lens / decoding_time if decoding_time > 0 else 0
-    #
-    #             tokens_time = decoding_time / valid_lens
-    #             latency = [0, prefill_time, tokens_time]
-    #
-    #             # 清理GPU内存
-    #             torch.cuda.empty_cache()
-    #
-    #             return TestResult(
-    #                 method='comp' if use_compression else 'orig',
-    #                 latency=latency,  # 只使用生成时间作为延迟
-    #                 success=True,
-    #                 memory_usage=memory_usage,
-    #                 request_size=request_size,
-    #                 throughput=throughput,
-    #                 valid_tokens=valid_lens,
-    #                 compression_ratio=compression_ratio,
-    #                 compression_time=compression_time,
-    #
-    #             )
-    #
-    #     # except Exception as e:
-    #     #     print(f"Error in batch processing: {str(e)}")
-    #     #     return TestResult(
-    #     #         method='comp' if use_compression else 'orig',
-    #     #         latency=0,
-    #     #         success=False,
-    #     #         memory_usage=0,
-    #     #         request_size=0,
-    #     #         compression_time=0,
-    #     #         throughput=0,
-    #     #         valid_tokens=0,
-    #     #         compression_ratio=None,
-    #     #         compression_time=None
-    #     #     )
 
     def _batching_tensors(self, dict_list):
         """
@@ -1077,27 +856,6 @@ class ImprovedConcurrentTester:
                         # print(len(past_key_values_split))
                         compression_ratio = 1.
                         compression_time = 0
-
-                    # # 准备生成输入
-                    # batch_size = inputs['input_ids'].shape[0]
-                    # kv_len = past_key_values[0][0].shape[2]
-                    # kv_attention_mask = torch.cat([
-                    #     inputs['attention_mask'],
-                    #     torch.ones(
-                    #         (batch_size, kv_len - inputs['attention_mask'].shape[1]),
-                    #         dtype=inputs['attention_mask'].dtype,
-                    #         device=self.device
-                    #     )
-                    # ], dim=-1)
-                    #
-                    # # 准备generation输入
-                    # input_ids = torch.cat([kv_attention_mask, inputs['input_ids'][:, -1].unsqueeze(-1)], dim=1)
-                    # attention_mask = torch.cat([kv_attention_mask, inputs['attention_mask'][:, -1].unsqueeze(-1)], dim=1)
-                    # inputs = {
-                    # 'input_ids': input_ids.to(self.device),
-                    # 'attention_mask': attention_mask.to(self.device),
-                    # 'pixel_values': None
-                    # }
                     inputs['pixel_values'] = None
 
                     # 准备返回结果
@@ -1455,31 +1213,6 @@ class ImprovedConcurrentTester:
 
         return metrics
 
-    # def _process_batch_wrapper(self, batches, middleware, batch_start_time, use_compression, comp_mode):
-    #     """包装批处理函数，添加时间统计"""
-    #     result = None
-    #     # try:
-    #     #     result = self._process_batch(batches, use_compression, comp_mode=comp_mode)  # 需要修改原始_process_batch以支持批处理
-    #     #     process_time = time.time() - batch_start_time
-    #     #     middleware.batch_times.append(process_time)
-    #     # finally:
-    #     #     with middleware.idle_lock:
-    #     #         middleware.idle_workers += 1
-    #     #         # print("batches", batches['input_ids'].shape)
-    #     #         middleware.processed_batches += batches['input_ids'].shape[0]
-    #     #         middleware.completion_event.set()
-    #     #     return result
-    #     result = self._process_batch(batches, use_compression, comp_mode=comp_mode)  # 需要修改原始_process_batch以支持批处理
-    #     process_time = time.time() - batch_start_time
-    #     middleware.batch_times.append(process_time)
-    #     with middleware.idle_lock:
-    #         middleware.idle_workers += 1
-    #         # print("batches", batches['input_ids'].shape)
-    #         middleware.processed_batches += batches['input_ids'].shape[0]
-    #         middleware.completion_event.set()
-    #     return result
-
-
 def load_checkpoint_only_model(model, filename, device=None):
     """加载检查点"""
     if os.path.isfile(filename):
@@ -1518,49 +1251,6 @@ def load_checkpoint_only_model(model, filename, device=None):
         print(f"No checkpoint found at '{filename}'")
         return 0, float('inf')
 
-
-# def parse_string_with_image(text, special_token="<image>"):
-#     """解析包含图像标记的文本"""
-#     is_exist_flag = 0
-#     if special_token in text:
-#         remaining_text = text.replace(special_token, '')
-#         remaining_text = remaining_text.strip()
-#         is_exist_flag = 1
-#     else:
-#         remaining_text = text
-#     return remaining_text, is_exist_flag
-
-# def load_image_data(json_path: str, imgsets_path: str, num_samples: int, mode=1) -> List[str]:
-#     """加载图像数据"""
-#     target_datasets = ['gqa']
-#     with open(json_path, 'r') as f:
-#         data = json.load(f)
-#     data = [d for d in data if 'image' in d.keys() and d['image'].split('/')[0] in target_datasets]
-#     random.shuffle(data)
-#
-#     if num_samples < 0:
-#         target_data = data
-#     else:
-#         target_data = data[:num_samples]
-#
-#     target_texts_image = []
-#     for d in target_data:
-#         if d['conversations'] and d['conversations'][0]["from"] == "human":
-#             questions_list = []
-#             answers_list = []
-#             for d_sentence in d['conversations']:
-#                 if d_sentence['from'] == 'human':
-#                     questions_list.append((
-#                         f"USER: <image> \nWhat's the content of the image? I am sick. "
-#                         f"Please describe every detail in the image with specific and detailed language. ASSISTANT:",
-#                         Image.open(f"{imgsets_path}{d['image']}").convert("RGB")
-#                     ))
-#                     answers_list.append(1)
-#                 else:
-#                     answers_list.append(d_sentence['value'])
-#             target_texts_image.append([questions_list, answers_list])
-#
-#     return target_texts_image
 def load_image_data(json_path: str, imgsets_path: str, num_samples: int, mode=1) -> List[str]:
     """加载图像数据"""
     target_datasets = ['gqa']
@@ -1590,6 +1280,81 @@ def load_image_data(json_path: str, imgsets_path: str, num_samples: int, mode=1)
                 else:
                     answers_list.append(d_sentence['value'])
             target_texts_image.append([questions_list, answers_list])
+
+    return target_texts_image
+
+def load_image_data_milebench(json_path: str, imgsets_path: str, num_samples: int, mode=1) -> List[str]:
+    """
+        扫描文件夹，查找带同名json的文件夹并收集其images子文件夹下的图片路径
+
+        Args:
+            root_path (str): 要扫描的根目录路径
+
+        Returns:
+            dict: 包含所有匹配文件夹信息的字典
+        """
+    root_path = Path(imgsets_path)
+    result = {}
+
+    # 图片格式
+    image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff')
+
+    # 遍历所有子目录
+    total_image_paths = []
+    for folder in root_path.rglob("*"):
+        if not folder.is_dir():
+            continue
+
+        # 检查是否存在同名json文件
+        folder_name = folder.name
+        json_file = folder / f"{folder_name}.json"
+        # json_file = folder.with_suffix('.json')
+        if not json_file.exists():
+            continue
+
+        # 检查images子文件夹
+        image_folder = folder / 'images'
+        if not image_folder.exists():
+            continue
+
+        # 递归收集图片路径
+        image_paths = []
+
+        def collect_images(current_folder):
+            """递归收集指定文件夹下的所有图片"""
+            for item in current_folder.iterdir():
+                if item.is_file() and item.suffix.lower() in image_extensions:
+                    image_paths.append(str(item))
+                elif item.is_dir():
+                    # 如果是文件夹，递归处理
+                    collect_images(item)
+
+        # 开始收集图片
+        collect_images(image_folder)
+
+        # 按照路径排序，确保输出顺序一致
+        image_paths.sort()
+
+        total_image_paths.extend(image_paths)
+
+    random.shuffle(total_image_paths)
+
+    if num_samples < 0:
+        target_data = total_image_paths
+    else:
+        target_data = total_image_paths[:num_samples]
+
+    target_texts_image = []
+    for d_image_path in target_data:
+        questions_list = []
+        answers_list = []
+        questions_list.append((
+            f"USER: <image> \nWhat's the content of the image? I am sick. "
+            f"Please describe every detail in the image with specific and detailed language. ASSISTANT:",
+            Image.open(f"{d_image_path}").convert("RGB")
+        ))
+        answers_list.append(1)
+        target_texts_image.append([questions_list, answers_list])
 
     return target_texts_image
 
@@ -1650,13 +1415,168 @@ def print_metrics(metrics: Dict[str, Dict[str, float]]):
         print(f"Throughput Improvement: {throughput_improvement:.2f}%")
 
 
+def format_metrics(metrics: Dict[str, Dict[str, float]], output_type: str = 'print') :
+    """
+    格式化性能指标并根据选择打印或返回JSON
+    Args:
+        metrics: 包含性能指标的字典
+        output_type: 'print' 或 'json'
+    Returns:
+        如果output_type为'json'返回JSON字符串，否则打印并返回None
+    """
+    output = []
+    output.append("=== Performance Test Results ===")
+
+    for method in ['orig', 'comp']:
+        output.append(f"\n--- {method.upper()} Method ---")
+        if not metrics.get(method):
+            output.append("No data available.")
+            continue
+
+        output.append(f"Total Requests: {metrics[method]['total_requests']:.0f}")
+        output.append(f"Success Rate: {metrics[method]['success_rate']:.2f}%")
+        output.append(f"Requests per Second: {metrics[method]['requests_per_second']:.2f}")
+
+        output.append("\n=== ttft Metrics (seconds) ===")
+        output.append(f"Average: {metrics[method]['avg_ttft']:.3f}")
+        output.append(f"Median (P50): {metrics[method]['median_ttft']:.3f}")
+        output.append(f"P90: {metrics[method]['p90_ttft']:.3f}")
+        output.append(f"P99: {metrics[method]['p99_ttft']:.3f}")
+        output.append(f"Min: {metrics[method]['min_ttft']:.3f}")
+        output.append(f"Max: {metrics[method]['max_ttft']:.3f}")
+
+        output.append("\n=== tpot Metrics (seconds) ===")
+        output.append(f"Average: {metrics[method]['avg_tpot']:.3f}")
+        output.append(f"Median (P50): {metrics[method]['median_tpot']:.3f}")
+        output.append(f"P90: {metrics[method]['p90_tpot']:.3f}")
+        output.append(f"P99: {metrics[method]['p99_tpot']:.3f}")
+        output.append(f"Min: {metrics[method]['min_tpot']:.3f}")
+        output.append(f"Max: {metrics[method]['max_tpot']:.3f}")
+
+        output.append("\n=== Resource Usage ===")
+        output.append(f"Average Memory Usage: {metrics[method]['avg_memory_usage']:.2f} MB")
+        output.append(f"Average Throughput: {metrics[method]['avg_throughput']:.2f} tokens/s")
+        output.append(f"Throughput StdDev: {metrics[method]['throughput_stddev']:.2f} tokens/s")
+
+        if method == 'comp':
+            output.append(f"Average Compression Ratio: {metrics[method].get('avg_compression_ratio', 0):.2f}")
+            output.append(f"Average Compression Time: {metrics[method].get('avg_compression_time', 0):.3f} seconds")
+
+    output.append("\n=== Summary ===")
+    if 'orig' in metrics and 'comp' in metrics:
+        latency_reduction = metrics['orig']['avg_latency'] - metrics['comp']['avg_latency']
+        memory_reduction = metrics['orig']['avg_memory_usage'] - metrics['comp']['avg_memory_usage']
+        throughput_increase = metrics['comp']['avg_throughput'] - metrics['orig']['avg_throughput']
+
+        if metrics['orig']['avg_throughput'] > 0:
+            throughput_improvement = (metrics['comp']['avg_throughput'] / metrics['orig']['avg_throughput'] * 100) - 100
+        else:
+            throughput_improvement = 0.0 if metrics['comp']['avg_throughput'] == 0 else float('inf')
+
+        output.append(f"Latency Reduction: {latency_reduction:.3f} seconds")
+        output.append(f"Memory Reduction: {memory_reduction:.2f} MB")
+        output.append(f"Throughput Increase: {throughput_increase:.2f} tokens/s")
+        output.append(f"Throughput Improvement: {throughput_improvement:.2f}%")
+
+    # formatted_output = '\n'.join(output)
+    return output
+
+
+def generate_results_txt(metrics, analyze_times_result, system_completion_time, system_total_generated_lens, comp_mode, file_path):
+    # 打印结果
+    output_file = []
+    output_file.append(f"{comp_mode}")
+    output_file.append(file_path)
+    output_file.extend(format_metrics(metrics))
+    output_file.append(f"{analyze_times_result}")
+    output_file.append(f"Service completed in {system_completion_time:.2f} seconds.")
+    output_file.append(f"Service generated {system_total_generated_lens} tokens.")
+    output_file.append(f"Thoughtput: {system_total_generated_lens / (system_completion_time + 1e-5):.2f} tokens/s.")
+    formatted_output = '\n'.join(output_file)
+    print(formatted_output)
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(formatted_output)
+    print(f"Report has been saved to {file_path}")
+
+def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
+                model, processor, compressor, max_new_tokens, num_samples,
+                compression_ratio_list, device, test_dataloader, max_workers,
+                max_wait_time, worker_check_time, datasets_name
+                ):
+    item_batching = test_batching_list[i_setting]
+
+    use_compression = item_setting[0]
+    comp_mode = item_setting[1]
+    # comp_mode = 'Knorm'
+    # comp_mode = 'StreamingLLM'
+    # comp_mode = 'RandomPress'
+    # comp_mode = 'SnapKV'
+    # comp_mode = 'ExpectedAttention'
+    # comp_mode = 'Quantized'
+    req_per_sec = i_req_sec
+    std_batch_threshold_prefill = item_batching[0]
+    compress_batch = item_batching[1]  # 无关prefill size
+    max_serve_batch_size = std_batch_threshold_prefill  # 测试批次数
+    min_batch_threshold = std_batch_threshold_prefill
+    std_batch_threshold_decoding = int(item_batching[2] / std_batch_threshold_prefill)
+
+    # use_compression = True
+    # comp_mode = 'ccm'
+    # comp_mode = 'Knorm'
+    # comp_mode = 'StreamingLLM'
+    # comp_mode = 'RandomPress'
+    # comp_mode = 'SnapKV'
+    # comp_mode = 'ExpectedAttention'
+    # comp_mode = 'Quantized'
+    # std_batch_threshold_prefill = 3
+    # compress_batch = 4  # 无关prefill size
+    # max_serve_batch_size = std_batch_threshold_prefill  # 测试批次数
+    # min_batch_threshold = std_batch_threshold_prefill
+    # std_batch_threshold_decoding = int(12 / std_batch_threshold_prefill)
+
+    # 创建测试器
+    print("Creating tester...")
+    args_ImprovedConcurrentTester = [
+        model, processor, compressor, max_new_tokens, num_samples, compress_batch,
+        compression_ratio_list, use_compression, comp_mode, device
+    ]
+    tester = ImprovedConcurrentTester(*args_ImprovedConcurrentTester)
+
+    # 运行并发测试
+    print("\nStarting concurrent testing...")
+    with autocast(dtype=torch.float):
+        metrics, analyze_times_result, \
+        system_completion_time, system_total_generated_lens \
+            = tester.run_concurrent_test(
+            test_dataloader,
+            max_workers=max_workers,
+            num_samples=num_samples,
+            max_serve_batch_size=max_serve_batch_size,
+            min_batch_threshold=min_batch_threshold,
+            std_batch_threshold_decoding=std_batch_threshold_decoding,
+            max_wait_time=max_wait_time,
+            worker_check_time=worker_check_time,
+            req_per_sec=req_per_sec,
+            use_compression=use_compression,
+            comp_mode=comp_mode
+        )
+
+    output_path = f"results_0106_log/comp_res_{datetime.now().strftime('%Y%m%d_%H%M%S')}_reqsec{i_req_sec:.0f}_" \
+                  f"p{item_batching[0]}c{item_batching[1]}d{item_batching[2]}_{comp_mode}_{datasets_name}.txt"
+    generate_results_txt(metrics, analyze_times_result, system_completion_time, system_total_generated_lens, comp_mode,
+                         output_path)
+
+    torch.cuda.empty_cache()
+
+
+
 def main():
     # 配置参数
     model_path = "/home/zhujianian/workspace/Uneed/huggingface_download/llava-1.5-7b-hf"
     ckpt_path = "/home/zhujianian/cvpr/ckpt_store/best_finetune_mlp_1030_mm_8.pth"
-    json_path = '/home/zhujianian/workspace/Uneed/huggingface_download/LLaVA-Instruct-150K/llava_v1_5_mix665k.json'
-    imgsets_path = '/home/zhujianian/cvpr/datasets/'
-    output_path = f"logs/compression_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+
+    # output_path = f"logs/compression_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
     # 基础参数配置
     seed = 48
@@ -1665,7 +1585,7 @@ def main():
     torch.cuda.manual_seed_all(seed)
 
     # 测试参数配置
-    num_samples =30  # 测试样本数
+    num_samples = 30  # 测试样本数
     batch_size = 1  # 批处理大小
     max_input_tokens = 128  # 最大输入长度
     max_new_tokens = 512
@@ -1674,7 +1594,8 @@ def main():
     max_workers = 1  # 并发数
 
     # use_compression = False
-    use_compression = True
+    # datasets_name = "milebench"
+    datasets_name = "gqa"
     comp_mode = 'ccm'
     # comp_mode = 'Knorm'
     # comp_mode = 'StreamingLLM'
@@ -1683,18 +1604,6 @@ def main():
     # comp_mode = 'ExpectedAttention'
     # comp_mode = 'Quantized'
 
-    # num_batches = 16    # 测试批次数
-
-    # req_per_sec = 20.
-    # max_serve_batch_size = 10 # 测试批次数
-    # min_batch_threshold = 10
-    # max_wait_time = 5
-    req_per_sec = 10.
-    std_batch_threshold_prefill = 10
-    compress_batch = 1
-    max_serve_batch_size = std_batch_threshold_prefill  # 测试批次数
-    min_batch_threshold = std_batch_threshold_prefill
-    std_batch_threshold_decoding = int(20 / std_batch_threshold_prefill)
     max_wait_time = 5
     worker_check_time = 0.5
 
@@ -1726,7 +1635,15 @@ def main():
 
     # 加载数据
     print("Loading test data...")
-    data = load_image_data(json_path, imgsets_path, num_samples)
+    data = None
+    if datasets_name == "gqa":
+        json_path = '/home/zhujianian/workspace/Uneed/huggingface_download/LLaVA-Instruct-150K/llava_v1_5_mix665k.json'
+        imgsets_path = '/home/zhujianian/cvpr/datasets/'
+        data = load_image_data(json_path, imgsets_path, num_samples)
+    elif datasets_name == "milebench":
+        json_path = '/data/huggingface/MileBench/'
+        imgsets_path = '/data/huggingface/MileBench/'
+        data = load_image_data_milebench(json_path, imgsets_path, num_samples)
     test_data = CustomImageTextDataset(data, processor, max_length=max_input_tokens)
     test_dataloader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
 
@@ -1734,45 +1651,35 @@ def main():
     model.eval()
     compressor.eval()
 
-    # 创建测试器
-    print("Creating tester...")
-    args_ImprovedConcurrentTester = [
-        model, processor, compressor, max_new_tokens, num_samples, compress_batch,
-        compression_ratio_list, use_compression, comp_mode, device
-    ]
-    tester = ImprovedConcurrentTester(*args_ImprovedConcurrentTester)
+    req_per_sec_list = [1.,3.,7.,10.]
+    # req_per_sec_list = [10.]
+    # test_setting_list = [[True, 'SnapKV']]
+    # test_setting_list = [[False, 'orig'],  [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
+    # test_batching_list = [[1, 1, 8]] * 4
+    # test_setting_list = [ [False, 'orig'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
+    # # test_setting_list = [[True, 'ccm'], [False, 'orig'], [True, 'ccm'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
+    # test_batching_list =  [[2,2,8]] * 4
+    # test_setting_list = [[False, 'orig'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
+    # test_batching_list = [[1,1,1]]*4
+    test_setting_list = [ [False, 'orig'], [True, 'Knorm'], [True, 'SnapKV'], [True, 'ExpectedAttention']]
+    test_batching_list = [[2,2,8]] * 4
+    # test_batching_list =  [[3,4,12]] + [[2,2,8]]*5
+    # test_batching_list =  [[3,4,12]] + [[1,1,8]]*5
+    # test_batching_list =  [[3,4,12]] + [[1,1,8]]*5
+    # test_batching_list =  [[3,4,12]] + [[1,1,8]]*5
 
-    # 运行并发测试
-    print("\nStarting concurrent testing...")
-    with autocast(dtype=torch.float):
-        metrics, analyze_times_result, \
-        system_completion_time, system_total_generated_lens\
-            = tester.run_concurrent_test(
-            test_dataloader,
-            max_workers=max_workers,
-            num_samples=num_samples,
-            max_serve_batch_size=max_serve_batch_size,
-            min_batch_threshold=min_batch_threshold,
-            std_batch_threshold_decoding=std_batch_threshold_decoding,
-            max_wait_time=max_wait_time,
-            worker_check_time=worker_check_time,
-            req_per_sec=req_per_sec,
-            use_compression=use_compression,
-            comp_mode=comp_mode
-        )
+    # req_per_sec_list = [10.]
+    # test_setting_list = [[True, 'ccm']]
+    # test_batching_list = [[3, 4, 8]]
 
-    # 打印结果
-    print(comp_mode)
-    print_metrics(metrics)
-    print(analyze_times_result)
-    print(f"Service completed in {system_completion_time:.2f} seconds.")
-    print(f"Service generated {system_total_generated_lens} tokens.")
-    print(f"Thoughtput: {system_total_generated_lens/(system_completion_time+1e-5):.2f} tokens/s.")
+    for i_req_sec in req_per_sec_list:
+        for i_setting, item_setting in enumerate(test_setting_list):
 
-    # 保存结果
-    with open(output_path, 'w') as f:
-        json.dump(metrics, f, indent=4)
-    print(f"\nResults saved to {output_path}")
+            exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
+                model, processor, compressor, max_new_tokens, num_samples,
+                compression_ratio_list, device, test_dataloader, max_workers,
+                max_wait_time, worker_check_time, datasets_name
+                )
 
 
 if __name__ == "__main__":
