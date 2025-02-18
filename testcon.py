@@ -37,7 +37,8 @@ v1.2
 v1.2.1
 comp_mode添加进设置中
 
-
+v1.2.2
+kvc attention mask debug
 
 
 
@@ -290,15 +291,19 @@ class CustomImageTextDataset(Dataset):
 
 class ImprovedConcurrentTester:
     """并发测试类"""
-    def __init__(self, model, processor, compressor, device):
+    def __init__(self, model, processor, compressor, max_new_tokens, compression_ratio_list, device):
         self.model = model
         self.processor = processor
         self.compressor = compressor
         self.device = device
+        self.max_new_tokens = max_new_tokens
+        self.compression_ratio_list = compression_ratio_list
         self.cuda_stream = torch.cuda.Stream()
         self.timeCheck = TimeTik()
         self.monitor = PerformanceMonitor()
         self.timestamp_manager = TimestampManager()
+        self.GPU_monitor = GPUMonitor(monitor_sys=False)
+
         self._init_press_list()
 
     def _init_press_list(self):
@@ -392,9 +397,9 @@ class ImprovedConcurrentTester:
             comp_duration_time = compress_finish - comp_start_time
             final_compression_ratio = orig_memory / memory_usage if memory_usage > 0 else 0.0
         elif comp_mode in self.press_type: # other comp
-            compression_ratio = 0.5
+
             # prefill_start = time.time()
-            press = press_select(comp_mode, compression_ratio)
+            press = press_select(comp_mode, 1-1/self.compression_ratio_list[1])
             print(press)
             underlying_model = get_underlying_model(self.model)
             prefill_start = time.time()
@@ -412,7 +417,7 @@ class ImprovedConcurrentTester:
             self.timestamp_manager.record_timestamp(request_ids_list, 'compress_queueing', prefill_finish)
             self.timestamp_manager.record_timestamp(request_ids_list, 'compress_start', prefill_finish)
             self.timestamp_manager.record_timestamp(request_ids_list, 'compress_finish', compress_finish)
-            final_compression_ratio = 1/(1-compression_ratio)
+            final_compression_ratio = 1/(1-1/self.compression_ratio_list[1])
             # prefill_fini_ = time.time()
             # prefill_time = prefill_fini_ - prefill_start
             # 0.63 0.047 存在很大的系统开销
@@ -734,12 +739,14 @@ class ImprovedConcurrentTester:
         dispatcher = Thread(target=self._dispatch_requests, args=(middleware, num_samples, use_compression, comp_mode, worker_check_time))
 
         self.monitor.start_time = time.time()
+        self.GPU_monitor.start_monitoring()
         collector.start()
         dispatcher.start()
 
         # 等待所有任务完成
         collector.join()
         dispatcher.join()
+        self.GPU_monitor.stop_monitoring()
         # # 启动收集线程和调度线程
         # collector = Thread(target=self._collect_requests, args=(dataloader, middleware, num_samples, req_per_sec))
         # dispatcher = Thread(target=self._dispatch_requests,
@@ -829,7 +836,9 @@ class ImprovedConcurrentTester:
                         self._process_decoding_wrapper,
                         results_batched,  # 提取batch数据
                         middleware,
-                        batch_start_time
+                        batch_start_time,
+                        use_compression,
+                        comp_mode
                     )
                     future.add_done_callback(self._on_decoding_complete)
 
@@ -1027,7 +1036,7 @@ class ImprovedConcurrentTester:
                     return prefill_result, batch_size, seq_lens, prefill_time, memory_usage
 
 
-    def _process_decoding_wrapper(self, prefill_result, middleware, batch_start_time):
+    def _process_decoding_wrapper(self, prefill_result, middleware, batch_start_time, use_compression, comp_mode):
         """包装批处理函数，添加时间统计"""
         # try:
         #     result = self._process_batch(batches, use_compression, comp_mode=comp_mode)  # 需要修改原始_process_batch以支持批处理
@@ -1043,7 +1052,7 @@ class ImprovedConcurrentTester:
         print("decoding start")
         decode_start = time.time()
         self.timestamp_manager.record_timestamp(prefill_result["request_id"], 'decode_start', decode_start)
-        result, batch_size, valid_lens, decoding_time, throughput = self._process_decoding(prefill_result)
+        result, batch_size, valid_lens, decoding_time, throughput = self._process_decoding(prefill_result, use_compression, comp_mode)
         decoding_finish = time.time()
         self.timestamp_manager.record_timestamp(prefill_result["request_id"], 'decoding_finish', decoding_finish)
         # 需要修改原始_process_batch以支持批处理
@@ -1066,7 +1075,7 @@ class ImprovedConcurrentTester:
             middleware.completion_event.set()
         return result
 
-    def _process_decoding(self, prefill_result):
+    def _process_decoding(self, prefill_result, use_compression, comp_mode):
         """处理decoding阶段，生成文本并返回结果"""
         with torch.cuda.stream(self.cuda_stream):
             # 从prefill结果中提取必要信息
@@ -1078,16 +1087,36 @@ class ImprovedConcurrentTester:
             # 准备生成输入
             batch_size = inputs['input_ids'].shape[0]
             kv_len = past_key_values[0][0].shape[2]
+            print("kv_len", kv_len)
 
-            # 构建attention mask
-            kv_attention_mask = torch.cat([
-                inputs['attention_mask'],
-                torch.ones(
-                    (batch_size, kv_len - inputs['attention_mask'].shape[1]),
-                    dtype=inputs['attention_mask'].dtype,
-                    device=self.device
-                )
-            ], dim=-1)
+            # # 构建attention mask
+            # kv_attention_mask = torch.cat([
+            #     inputs['attention_mask'],
+            #     torch.ones(
+            #         (batch_size, kv_len - inputs['attention_mask'].shape[1]),
+            #         dtype=inputs['attention_mask'].dtype,
+            #         device=self.device
+            #     )
+            # ], dim=-1)
+            if use_compression:
+                if comp_mode == "ccm":
+                    padding_lens, valid_lens, comp_padding_lens = self.get_comp_padding_valid_lengths(inputs['attention_mask'],
+                                                                                                 compress_ratio=self.compression_ratio_list[0])
+                else:
+                    padding_lens, valid_lens, comp_padding_lens = self.get_comp_padding_valid_lengths(
+                        inputs['attention_mask'],
+                        compress_ratio=self.compression_ratio_list[1])
+            else:
+                padding_lens, valid_lens, comp_padding_lens = self.get_comp_padding_valid_lengths(
+                    inputs['attention_mask'],
+                    compress_ratio=1.0)
+
+            kv_attention_mask = torch.ones(
+                (batch_size, kv_len),
+                dtype=inputs['attention_mask'].dtype,
+                device=inputs['attention_mask'].device
+            )
+            kv_attention_mask = self.create_attention_mask_from_padding(comp_padding_lens, kv_attention_mask)
 
             # 准备generation输入
             input_ids = torch.cat([
@@ -1106,7 +1135,7 @@ class ImprovedConcurrentTester:
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
-                max_new_tokens=512 - inputs['input_ids'].shape[1],
+                max_new_tokens=self.max_new_tokens,
                 do_sample=True,
                 temperature=0.7,
                 use_cache=True,
@@ -1142,6 +1171,59 @@ class ImprovedConcurrentTester:
             torch.cuda.empty_cache()
 
             return result, batch_size, valid_lens, decoding_time, throughput
+
+    def get_comp_padding_valid_lengths(self, attention_mask: torch.Tensor, compress_ratio=1.0):
+        """
+        计算注意力掩码中每个 batch 的有效位数量，支持左填充和右填充
+
+        Args:
+            attention_mask: 形状为 [batch_size, seq_lens] 的注意力掩码张量
+                           1 表示有效位置，0 表示被掩码的位置
+            left_padded: 是否为左侧填充（默认为 True）
+                        - True: 0在左边，有效token在右边
+                        - False: 有效token在左边，0在右边
+
+        Returns:
+            torch.Tensor: 形状为 [batch_size] 的张量，表示每个 batch 中有效位的数量
+        """
+        assert len(attention_mask.shape) == 2, \
+            f"AttentionMask should be 2D tensor, got shape {attention_mask.shape}"
+        valid_lens = attention_mask.sum(dim=1).long()
+        padding_lens = attention_mask.shape[1] - valid_lens
+        comp_padding_lens = (padding_lens / compress_ratio).int()
+        return padding_lens, valid_lens, comp_padding_lens
+
+    def create_attention_mask_from_padding(self, padding_lengths: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        根据 padding 长度创建 attention mask
+
+        Args:
+            padding_lengths: 形状为 [batch_size] 的张量，表示每个序列的 padding 长度
+            seq_length: 序列总长度，如果为 None，则使用最大 padding 长度加上最长有效长度
+
+        Returns:
+            torch.Tensor: 形状为 [batch_size, seq_length] 的 attention mask
+
+        Example:
+            tensor([[0, 0, 1, 1, 1],
+                    [0, 0, 0, 1, 1],
+                    [0, 1, 1, 1, 1]])
+        """
+        batch_size = padding_lengths.size(0)
+
+        # # 如果没有指定序列长度，则计算所需的最小长度
+        # if seq_length is None:
+        #     max_valid_length = max(torch.arange(batch_size).size(0) - padding_lengths)
+        #     seq_length = max_valid_length + padding_lengths.max()
+        #
+        # # 创建全 1 tensor
+        # mask = torch.ones((batch_size, seq_length), device=padding_lengths.device)
+
+        # 为每个序列的左侧填充位置设置 0
+        for i in range(batch_size):
+            mask[i, :padding_lengths[i]] = 0
+
+        return mask
 
     def _calculate_performance_metrics(self, metrics_window):
         """计算详细的性能指标"""
@@ -1389,15 +1471,17 @@ def main():
     # 测试参数配置
     num_samples = 50     # 测试样本数
     batch_size = 1       # 批处理大小
-    max_input_tokens = 128  # 最大输入长度
-    compression_factor = 5  # 压缩率
+    max_input_tokens = 512  # 最大输入长度
+    max_new_tokens = 512
+    # compression_factor = 5  # 压缩率
+    compression_ratio_list = [5., 2.]  # 压缩率
     max_workers = 1    # 并发数
-    # comp_mode = 'ccm'
+    comp_mode = 'ccm'
     # comp_mode = 'Knorm'
     # comp_mode = 'StreamingLLM'
     # comp_mode = 'RandomPress'
     # comp_mode = 'SnapKV'
-    comp_mode = 'ExpectedAttention'
+    # comp_mode = 'ExpectedAttention'
     # comp_mode = 'Quantized'
 
     # num_batches = 16    # 测试批次数
@@ -1432,7 +1516,7 @@ def main():
     print("Initializing compressor...")
     compressor = KVCacheLinearDecoupleCompressor(
         src_config=model.config,
-        compression_factor=compression_factor,
+        compression_factor=int(compression_ratio_list[0]),
         min_seq_len=2,
     ).to(device)
 
@@ -1452,7 +1536,7 @@ def main():
 
     # 创建测试器
     print("Creating tester...")
-    tester = ImprovedConcurrentTester(model, processor, compressor, device)
+    tester = ImprovedConcurrentTester(model, processor, compressor, max_new_tokens, compression_ratio_list, device)
     
     # 运行并发测试
     print("\nStarting concurrent testing...")
