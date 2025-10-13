@@ -1,0 +1,13 @@
+torch>=2.1
+transformers>=4.43
+accelerate>=0.29
+sentencepiece
+protobuf
+pillow
+opencv-python
+numpy
+tqdm
+pynvml
+nvtx
+pyyaml
+kvpress>=0.3.0

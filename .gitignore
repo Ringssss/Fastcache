@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+.venv/
+.env
+ckpt/
+results_*/
+logs/
+*.log
+*.csv
+.DS_Store

@@ -1,0 +1,38 @@
+# 全局配置，适用于本次批处理中的所有实验
+# 如果命令行中也指定了这些参数，命令行有更高优先级
+global_settings:
+  model_path: /data/huggingface/MiniCPM-V-2_6
+  # 如果你的 ccm 模式需要 ckpt，请在这里提供（建议放仓库本地 ckpt/ 下或使用 Release 资源）
+  ckpt_path: ckpt/minicpm_mlp.pth
+  datasets_js_path: /data/huggingface/LLaVA-Instruct-150K/llava_v1_5_mix665k.json
+  datasets_img_path: ./datasets
+  num_samples: 90
+  req_per_sec: 10.0
+  datasets_name: "gqa"
+
+# 实验列表：定义每个要运行的测试
+experiments:
+  - name: "Original Model"
+    use_compression: False
+    comp_mode: 'orig'
+    batching: [5, 5, 5] # [prefill, decoding, compress]
+
+  - name: "Knorm Compression"
+    use_compression: True
+    comp_mode: 'Knorm'
+    batching: [5, 5, 5]
+
+  - name: "SnapKV Compression"
+    use_compression: True
+    comp_mode: 'SnapKV'
+    batching: [5, 5, 5]
+
+  - name: "ExpectedAttention Compression"
+    use_compression: True
+    comp_mode: 'ExpectedAttention'
+    batching: [5, 5, 5]
+  
+  - name: "CCM Compression"
+    use_compression: True
+    comp_mode: 'ccm'
+    batching: [15, 45, 90]
