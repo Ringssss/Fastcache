@@ -30,17 +30,20 @@ The scripts use `trust_remote_code=True` for these repos.
 
 ## 3) Compressor MLP Weights (CCM)
 
-There are two MLP checkpoints (one for MiniCPM, one for LLaVA). Do NOT put large binaries in git. Recommended options:
-
-- Option A (preferred): upload both `.pth` files as GitHub Release assets for this repo, and add their URLs here.
-- Option B: use Git LFS and track `ckpt/*.pth`.
-
-Local placement expected by defaults:
+Two MLP checkpoints (MiniCPM + LLaVA) are stored in this repo via Git LFS so you can run out of the box:
 
 - ckpt/minicpm_mlp.pth   (MiniCPM)
 - ckpt/llava_mlp.pth     (LLaVA)
 
-Update the CLI `--ckpt_path` accordingly or edit configs/experiments.yaml.
+Make sure you have Git LFS:
+
+```bash
+git lfs install
+# If the files are not present after clone, fetch them explicitly:
+git lfs pull
+```
+
+If you want to host weights elsewhere (e.g., GitHub Releases/Hugging Face) just update `--ckpt_path` or configs/experiments.yaml.
 
 ## 4) Datasets
 
@@ -113,4 +116,3 @@ python scripts/minicpm_testcon2.6.py --config configs/experiments.yaml
 - utils_ccm/: shared modules (compressors, scheduler, kv-pool, helpers)
 - configs/: example YAML for batch experiments
 - ckpt/: place your two MLP weights here locally (or download from Release)
-
