@@ -5,7 +5,8 @@ __pycache__/
 *.so
 .venv/
 .env
-ckpt/
+ckpt/*
+!ckpt/*.pth
 results_*/
 logs/
 *.log
