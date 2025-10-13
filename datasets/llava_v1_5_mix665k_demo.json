@@ -1,0 +1,18 @@
+[
+  {
+    "id": "demo-1",
+    "image": "gqa/demo1.jpg",
+    "conversations": [
+      {"from": "human", "value": "<image> Please describe the image in detail."},
+      {"from": "assistant", "value": "This is a demo image used for quick smoke testing."}
+    ]
+  },
+  {
+    "id": "demo-2",
+    "image": "gqa/demo2.jpg",
+    "conversations": [
+      {"from": "human", "value": "<image> What is shown in the picture?"},
+      {"from": "assistant", "value": "Another demo image for testing."}
+    ]
+  }
+]

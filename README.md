@@ -28,6 +28,33 @@ You need the base model weights locally (HF or internal mirror). Example paths b
 
 The scripts use `trust_remote_code=True` for these repos.
 
+## 2.1) Quick Demo Dataset (No External Download)
+
+We include a tiny demo dataset in `datasets/` with two small images and a LLaVA-style JSON (`datasets/llava_v1_5_mix665k_demo.json`).
+Use it to validate your setup without downloading large datasets:
+
+```bash
+# MiniCPM quick demo (2 samples)
+python scripts/minicpm_testcon2.6.py \
+  --model_path /data/huggingface/MiniCPM-V-2_6 \
+  --ckpt_path ckpt/minicpm_mlp.pth \
+  --datasets_js_path datasets/llava_v1_5_mix665k_demo.json \
+  --datasets_img_path ./datasets \
+  --use_compression --comp_mode ccm \
+  --prefill_batch_size 1 --compress_batch_size 1 --decoding_batch_size 1 \
+  --req_per_sec 1.0 --num_samples 2 --torch_dtype float16
+
+# LLaVA quick demo (2 samples)
+python scripts/llava_testcon2.6.py \
+  --model_path /data/huggingface/llava-1.5-7b-hf \
+  --ckpt_path ckpt/llava_mlp.pth \
+  --datasets_js_path datasets/llava_v1_5_mix665k_demo.json \
+  --datasets_img_path ./datasets \
+  --use_compression --comp_mode ccm \
+  --prefill_batch_size 1 --compress_batch_size 1 --decoding_batch_size 1 \
+  --req_per_sec 1.0 --num_samples 2 --torch_dtype float16
+```
+
 ## 3) Compressor MLP Weights (CCM)
 
 Two MLP checkpoints (MiniCPM + LLaVA) are stored in this repo via Git LFS so you can run out of the box:
