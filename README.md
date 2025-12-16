@@ -137,9 +137,53 @@ python scripts/minicpm_testcon2.6.py --config configs/experiments.yaml
 - CUDA OOM: reduce batch sizes and/or use `--torch_dtype float16`.
 - kvpress import errors: `pip install kvpress`.
 
-## 10) Repository Layout
+## 10) Training Compressors
 
-- scripts/: entry points
+We provide training scripts for both LLaVA and MiniCPM compressors in `scripts/`.
+
+### Training Goal
+
+Train MLP-based KV-cache compressors that reduce memory footprint while preserving model output quality. The compressor learns to compress the Key-Value cache with minimal information loss.
+
+### Training Method
+
+- **Knowledge Distillation**: The compressor is trained to produce outputs that match the original (uncompressed) model's output distribution.
+- **Loss Function**: KL divergence between compressed and original output logits, combined with accuracy metrics.
+- **Architecture**: Linear decouple compressor (`KVCacheLinearDecoupleCompressor` for LLaVA) and hybrid compressor (`KVCacheHybridCompressor` for MiniCPM).
+
+### Training Scripts
+
+| Script | Model | Output Checkpoint |
+|--------|-------|-------------------|
+| `scripts/finetune_llava.py` | LLaVA-1.5-7B | `best_finetune_mlp_1030_mm_9.pth` |
+| `scripts/finetune_minicpm.py` | MiniCPM-V-2.6 | `best_finetune_mlp_13B_mm_1_minicpm.pth` |
+
+### Training Procedure
+
+1. Load pre-trained VLM model (LLaVA or MiniCPM)
+2. Forward pass to generate original KV-cache
+3. Compress KV-cache using the compressor network
+4. Compute loss between compressed and original outputs
+5. Backpropagate and update compressor weights
+
+### Example Training Command (LLaVA)
+
+```bash
+# Modify paths in finetune_llava.py before running
+python scripts/finetune_llava.py
+```
+
+Key parameters to adjust in the script:
+- `model_path`: Path to LLaVA/MiniCPM model
+- `json_path`: Path to training data (LLaVA-Instruct-150K)
+- `imgsets_path`: Path to image datasets
+- `compression_ratio`: Target compression ratio (default: 5x)
+- `num_epochs`: Number of training epochs
+- `learning_rate`: Learning rate (default: 5e-4)
+
+## 11) Repository Layout
+
+- scripts/: entry points and training scripts
 - utils_ccm/: shared modules (compressors, scheduler, kv-pool, helpers)
 - configs/: example YAML for batch experiments
 - ckpt/: place your two MLP weights here locally (or download from Release)
