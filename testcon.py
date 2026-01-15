@@ -1,3 +1,7 @@
+from fastcache_paths import ensure_sys_paths, CKPT_DIR, DATASETS_DIR, RESULTS_DIR
+
+ensure_sys_paths()
+
 import os
 import torch
 # torch.backends.cuda.enable_flash_sdp(True)  # 启用 Flash Attention
@@ -2143,7 +2147,7 @@ def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
 def main():
     # 配置参数
     model_path = "/home/zhujianian/workspace/Uneed/huggingface_download/llava-1.5-7b-hf"
-    ckpt_path = "/home/zhujianian/cvpr/ckpt_store/best_finetune_mlp_1030_mm_9.pth"
+    ckpt_path = str(CKPT_DIR / "llava_mlp.pth")
 
 
     # output_path = f"logs/compression_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -2264,7 +2268,7 @@ def main():
     data = None
     if datasets_name == "gqa":
         json_path = '/home/zhujianian/workspace/Uneed/huggingface_download/LLaVA-Instruct-150K/llava_v1_5_mix665k.json'
-        imgsets_path = '/home/zhujianian/cvpr/datasets/'
+        imgsets_path = str(DATASETS_DIR) + "/"
         data = load_image_data(json_path, imgsets_path, num_samples)
     elif datasets_name == "milebench":
         json_path = '/data/huggingface/MileBench/'

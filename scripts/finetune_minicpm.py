@@ -1,3 +1,7 @@
+from fastcache_paths import ensure_sys_paths, CKPT_DIR, DATASETS_DIR, RESULTS_DIR
+
+ensure_sys_paths()
+
 import time
 import torch
 import torch.nn as nn
@@ -1423,7 +1427,7 @@ def main():
         tokenizer_path = "/data/huggingface/MiniCPM-V-2_6"
         # model_path = "/data/huggingface/llava-1.5-7b-hf"  # 填入您的模型路径
         json_path = '/data/huggingface/LLaVA-Instruct-150K/llava_v1_5_mix665k.json'  # 填入您的图像数据集路径
-        imgsets_path = '/home/zhujianian/cvpr/datasets/'  # 填入您的图像文件路径
+        imgsets_path = str(DATASETS_DIR) + "/"  # 填入您的图像文件路径
         # compressor_load_path = "./ckpt_store/best_finetune_mlp_1030_mm_8.pth"
         compressor_load_path = ""
         compressor_save_path = f'finetune_mlp_13B_mm_2_minicpm.pth'

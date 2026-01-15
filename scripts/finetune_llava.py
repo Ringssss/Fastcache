@@ -1,3 +1,7 @@
+from fastcache_paths import ensure_sys_paths, CKPT_DIR, DATASETS_DIR, RESULTS_DIR
+
+ensure_sys_paths()
+
 import time
 import torch
 import torch.nn as nn
@@ -962,7 +966,7 @@ def main():
     # dmodel_path = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     # json_path = '/home/zhujianian/workspace/Uneed/huggingface_download/ShareGPT_Vicuna_unfiltered/ShareGPT_V3_unfiltered_cleaned_split.json'
     json_path = '/home/zhujianian/workspace/Uneed/huggingface_download/LLaVA-Instruct-150K/llava_v1_5_mix665k.json'
-    imgsets_path = '/home/zhujianian/cvpr/datasets/'
+    imgsets_path = str(DATASETS_DIR) + "/"
     # encoder_path = './best_model_0.4mae.pth'
     # decoder_path = './val28.71-best_model_finetune.pth'
 

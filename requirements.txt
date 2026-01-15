@@ -11,3 +11,7 @@ pynvml
 nvtx
 pyyaml
 kvpress>=0.3.0
+triton>=3.0.0
+flash-attn
+fastapi
+uvicorn

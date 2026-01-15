@@ -1,3 +1,7 @@
+from fastcache_paths import ensure_sys_paths, CKPT_DIR, DATASETS_DIR, RESULTS_DIR
+
+ensure_sys_paths()
+
 
 import os
 import torch
@@ -2122,7 +2126,7 @@ def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
 # def main():
 #     # 配置参数
 #     # model_path = "/data/huggingface/llava-1.5-7b-hf"
-#     # ckpt_path = "/home/zhujianian/cvpr/ckpt_store/best_finetune_mlp_1030_mm_9.pth"
+#     # ckpt_path = str(CKPT_DIR / "llava_mlp.pth")
 #     model_path = "/data/huggingface/MiniCPM-V-2_6"
 #     ckpt_path = "ckpt/minicpm_mlp.pth"
 
@@ -2249,7 +2253,7 @@ def exec_testit(test_batching_list, i_setting, item_setting, i_req_sec,
 #     data = None
 #     if datasets_name == "gqa":
 #         json_path = '/data/huggingface/LLaVA-Instruct-150K/llava_v1_5_mix665k.json'
-#         imgsets_path = '/home/zhujianian/cvpr/datasets/'
+#         imgsets_path = str(DATASETS_DIR) + "/"
 #         data = load_image_data(json_path, imgsets_path, num_samples)
 #     elif datasets_name == "milebench":
 #         json_path = '/data/huggingface/MileBench/'
