@@ -187,3 +187,47 @@ Key parameters to adjust in the script:
 - utils_ccm/: shared modules (compressors, scheduler, kv-pool, helpers)
 - configs/: example YAML for batch experiments
 - ckpt/: place your two MLP weights here locally (or download from Release)
+
+## 12) KV-cache Pipeline（SM 分离/GreenContext）
+
+本仓库同时包含基于 nano-vllm 的 method-aware KV-cache 压缩流水线，位于：
+
+- `kv-cache pipeline/`：运行时与压缩调度器
+- `kv-cache pipeline/bench/bench_kvcache_matrix.py`：端到端吞吐矩阵测试
+- `kv-cache pipeline/greenctx_shim/`：GreenContext shim 源码与构建脚本
+- `docs/kv-cache-pipeline-e2e.md`：完整中文端到端指南
+
+### 快速使用（示例）
+
+```bash
+cd "kv-cache pipeline"
+```
+
+编译 GreenContext shim（可选，用于 sgl_kernel ABI 不匹配时）：
+
+```bash
+./greenctx_shim/build_shim.sh
+```
+
+运行基准测试（示例）：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+LD_PRELOAD=./greenctx_shim/sgl_kernel_shim.so \
+python bench/bench_kvcache_matrix.py \
+  --models qwen3-8b \
+  --workloads synthetic-long \
+  --variants compression-only,triad \
+  --synthetic-context 4096 \
+  --synthetic-output 128 \
+  --synthetic-token "Hello" \
+  --synthetic-num-batches 1 \
+  --synthetic-batch-sizes "32,64" \
+  --qwen3-8b /data/huggingface/Qwen3-8B
+```
+
+更多细节请参考：`docs/kv-cache-pipeline-e2e.md`。
+
+## Reference
+
+Zhu, J., Wu, H., Wang, H., Li, Y., Hou, B., Li, R., & Zhai, J. (2025). Fastcache: Optimizing multimodal llm serving through lightweight kv-cache compression framework. arXiv preprint arXiv:2503.08461.
