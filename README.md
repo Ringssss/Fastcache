@@ -230,4 +230,6 @@ python bench/bench_kvcache_matrix.py \
 
 ## Reference
 
+```
 Zhu, J., Wu, H., Wang, H., Li, Y., Hou, B., Li, R., & Zhai, J. (2025). Fastcache: Optimizing multimodal llm serving through lightweight kv-cache compression framework. arXiv preprint arXiv:2503.08461.
+```
